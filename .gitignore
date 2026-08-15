@@ -1,0 +1,8 @@
+node_modules/
+plugin/main.js
+plugin/main.js.map
+plugin/test/build/
+plugin/data.json
+.devbox/
+/.claude
+/theme/fonts

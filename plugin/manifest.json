@@ -1,0 +1,9 @@
+{
+  "id": "forester",
+  "name": "Forester",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Render notes and ![[embeds]] with Forester's nested-tree visuals: taxon + hierarchical numbering, [slug], metadata line, and flat 5px transclusion nesting.",
+  "author": "miya",
+  "isDesktopOnly": false
+}

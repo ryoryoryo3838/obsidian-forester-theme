@@ -1,0 +1,244 @@
+/*
+ * Structural CSS for the Forester plugin.
+ *
+ * Values are taken from `site/theme/style.css`; the comment on each group names
+ * the selector they come from so the two can be diffed when the site changes.
+ * Typography and palette live in the companion theme, not here.
+ */
+
+body.forester-enabled {
+	--forester-indent: 5px;
+	--forester-hover: rgba(0, 100, 255, 0.04);
+	--forester-taxon: #444;
+	--forester-root-taxon: #888;
+	--forester-slug: gray;
+}
+
+.theme-dark body.forester-enabled,
+body.forester-enabled.theme-dark {
+	--forester-hover: rgba(120, 170, 255, 0.07);
+	--forester-taxon: #bbb;
+	--forester-root-taxon: #888;
+	--forester-slug: #888;
+}
+
+/* ── .block ───────────────────────────────────────────────────────────────── */
+/* style.css: .block { padding-left:5px; padding-right:10px; padding-bottom:2px;
+   border-radius:5px } and .block:hover { background: rgba(0,100,255,.04) } */
+
+.forester-enabled .internal-embed[data-forester="embed"] {
+	display: block;
+	padding: 0 10px 2px 5px;
+	border: none;
+	border-radius: 5px;
+	background: none;
+	margin: 0 0 0.4em 0;
+}
+
+/* Touch devices latch :hover after a tap, so the tint would never clear. */
+@media (hover: hover) {
+	.forester-enabled .internal-embed[data-forester="embed"]:hover {
+		background-color: var(--forester-hover);
+	}
+}
+
+.forester-indented {
+	padding-inline-start: calc(var(--forester-indent, 5px) * var(--forester-depth, 0));
+}
+
+/* ── Obsidian's own embed chrome ──────────────────────────────────────────── */
+/* Forester has no embed frame: a transclusion is just another .block. */
+
+.forester-enabled .internal-embed[data-forester="embed"] > .markdown-embed-title,
+.forester-enabled .internal-embed[data-forester="embed"] > .markdown-embed-link {
+	display: none;
+}
+
+.forester-enabled .internal-embed[data-forester="embed"] > .markdown-embed-content {
+	max-height: none;
+	padding: 0;
+	margin: 0;
+	overflow: visible;
+}
+
+.forester-enabled .internal-embed[data-forester="embed"] .markdown-preview-view,
+.forester-enabled .internal-embed[data-forester="embed"] .markdown-rendered {
+	padding: 0;
+	height: auto;
+	max-height: none;
+	overflow: visible;
+	background: none;
+}
+
+.forester-enabled .internal-embed[data-forester="embed"] .markdown-preview-sizer {
+	padding-bottom: 0 !important;
+	min-height: 0 !important;
+	width: 100%;
+	max-width: none;
+	margin: 0;
+}
+
+.forester-enabled .internal-embed[data-forester="embed"] .markdown-preview-pusher {
+	display: none;
+}
+
+/* The transcluded tree's own `# Title` is promoted into the header above it. */
+.forester-enabled .forester-promoted-title {
+	display: none;
+}
+
+/* ── details / summary ────────────────────────────────────────────────────── */
+/* style.css: section.block>details { margin-bottom:.4em } and [open] { 1em } */
+
+.forester-enabled .forester-header {
+	display: block;
+	cursor: pointer;
+	margin-bottom: 0;
+}
+
+.forester-enabled .internal-embed[data-forester="embed"]:not(.forester-collapsed) {
+	margin-bottom: 1em;
+}
+
+.forester-enabled .forester-collapsed > .markdown-embed-content {
+	display: none;
+}
+
+/* ── titles ───────────────────────────────────────────────────────────────── */
+/* style.css: details h1 { font-size:13pt; display:inline }
+   and section .block[data-taxon] … h1 { font-size:12pt } */
+
+.forester-enabled .forester-header > h1 {
+	display: inline;
+	font-size: 13pt;
+	font-weight: bold;
+	line-height: 1.2;
+	margin: 0;
+	letter-spacing: 0;
+}
+
+.forester-enabled [data-taxon] > .forester-header > h1 {
+	font-size: 12pt;
+}
+
+/* Headings inside a note are the same subtree titles, so they get the same
+   treatment regardless of level — depth is conveyed by the number, not size. */
+.forester-enabled .forester-subtree-title {
+	font-size: 13pt;
+	font-weight: bold;
+	line-height: 1.2;
+	margin-top: 0.5em;
+	margin-bottom: 0;
+	letter-spacing: 0;
+	color: var(--text-normal);
+}
+
+/* style.css: span.taxon { color:#444; font-weight:bolder } */
+.forester-enabled span.taxon {
+	color: var(--forester-taxon);
+	font-weight: bolder;
+}
+
+/* style.css: section section[data-taxon="Reference"] … > .taxon,
+              section section[data-taxon="Person"]   … > .taxon { display:none }
+   Biographical and bibliographic trees are transcluded as bare titles. */
+.forester-enabled [data-taxon="Person"] > .forester-header > h1 > span.taxon,
+.forester-enabled [data-taxon="Reference"] > .forester-header > h1 > span.taxon {
+	display: none;
+}
+
+/* style.css: article>section>…>h1>.taxon { display:block; font-size:.9em;
+   color:#888; padding-bottom:5pt } */
+.forester-enabled .forester-root-title {
+	font-size: 1.5em;
+	font-weight: bold;
+	line-height: 1.2;
+	margin-top: 0.5em;
+	margin-bottom: 0;
+}
+
+.forester-enabled .forester-root-title > span.taxon {
+	display: block;
+	font-size: 0.9em;
+	color: var(--forester-root-taxon);
+	font-weight: bolder;
+	padding-bottom: 5pt;
+}
+
+/* ── slug ─────────────────────────────────────────────────────────────────── */
+/* style.css: .slug { color:gray; font-weight:200 } and a.slug { dotted } */
+
+.forester-enabled a.slug {
+	color: var(--forester-slug);
+	font-weight: 200;
+	font-size: 0.9em;
+	box-shadow: none;
+	text-decoration-line: underline;
+	text-decoration-style: dotted;
+	cursor: pointer;
+}
+
+/* The slug carries `internal-link` so Obsidian's page preview picks it up; win
+   the specificity race against the theme's link colour. */
+.forester-enabled a.slug.internal-link,
+.markdown-rendered a.slug.internal-link {
+	color: var(--forester-slug);
+	text-decoration-style: dotted;
+}
+
+@media (hover: hover) {
+	.forester-enabled a.slug:hover,
+	.forester-enabled a.slug.internal-link:hover {
+		background-color: rgba(0, 100, 255, 0.1);
+		color: var(--forester-slug);
+	}
+}
+
+/* Mobile: the header is a tap target for collapsing, and the slug is a tap
+   target for navigating. Neither should flash the platform highlight. */
+.forester-mobile .forester-header,
+.forester-mobile a.slug {
+	-webkit-tap-highlight-color: transparent;
+}
+
+.forester-mobile a.slug {
+	padding: 0 0.15em;
+}
+
+body.forester-hide-slugs a.slug {
+	display: none;
+}
+
+/* ── metadata ─────────────────────────────────────────────────────────────── */
+/* style.css: .metadata ul { padding-left:0; display:inline }
+   .metadata li::after { content:" · " } (last-child: none) */
+
+.forester-enabled .metadata {
+	font-size: 0.9em;
+	color: var(--text-muted);
+}
+
+.forester-enabled .metadata ul {
+	padding-left: 0;
+	margin: 0;
+	display: inline;
+	list-style: none;
+}
+
+.forester-enabled .metadata ul li {
+	display: inline;
+}
+
+.forester-enabled .metadata li::after {
+	content: " · ";
+}
+
+.forester-enabled .metadata li:last-child::after {
+	content: "";
+}
+
+.forester-enabled .metadata address,
+.forester-enabled .metadata .author {
+	display: inline;
+	font-style: normal;
+}
