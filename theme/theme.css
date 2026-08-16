@@ -10,8 +10,16 @@
  */
 
 /* ── Fonts ────────────────────────────────────────────────────────────────── */
-/* style.css declares Honoka Shin Mincho for Japanese and Inria Sans for Latin.
-   The .woff2 files live next to this file; see README for how they get there. */
+/* style.css sets prose in BIZ UDMincho and names Inria Sans explicitly for the
+   hero, the navigation, and the metadata. Inria Sans ships with this theme, as
+   .woff2 next to this file; see README for how they get there.
+
+   BIZ UDMincho does not. The site serves it as 248 unicode-range slices — 8MB
+   on disk — which is right for a page a stranger loads once and wrong for a
+   theme that is copied into every vault. Install the font on the machine
+   instead (https://github.com/googlefonts/morisawa-biz-ud-mincho, or it comes
+   with Windows); the stack below falls back to the platform mincho, and on
+   Android, which bundles none, to the platform serif. */
 
 @font-face {
 	font-display: swap;
@@ -77,11 +85,12 @@
 	/* style.css: #grid-wrapper>article { max-width: 90ex } */
 	--file-line-width: 90ex;
 
-	/* Hiragino Mincho ProN is the iOS fallback; Android has no bundled mincho,
-	   so it lands on the platform serif. Inria Sans is shipped with the theme
-	   and so is available everywhere. */
-	--font-text-theme: "Honoka Shin Mincho", "BIZ UDMincho", "Inria Sans",
-		"Hiragino Mincho ProN", "Noto Serif JP", serif;
+	/* style.css: body { font-family: "BIZ UDMincho", "Hiragino Mincho ProN",
+	   "Yu Mincho", serif } — Latin included, so a line of mixed Japanese and
+	   English is set in one voice. Noto Serif JP is added here as a last
+	   resort a vault is more likely to have than a site visitor. */
+	--font-text-theme: "BIZ UDMincho", "Hiragino Mincho ProN", "Yu Mincho",
+		"Noto Serif JP", serif;
 	--font-interface-theme: "Inria Sans", "UDEV Gothic 35NFLG", sans-serif;
 	--font-monospace-theme: "UDEV Gothic 35NFLG", "PlemolJP35 Console NF",
 		ui-monospace, monospace;
