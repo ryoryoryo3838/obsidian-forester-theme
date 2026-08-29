@@ -10,9 +10,11 @@ The published site is authoritative. Every rule here is ported from
 When the site's theme changes, change this repo to follow.
 
 ```
-theme/     Obsidian theme  — typography, palette, widths, link/code/list rules
-plugin/    Obsidian plugin — transclusion blocks, taxon prefixes, 1.1 numbering
-scripts/   install.sh — symlinks both into a vault
+manifest.json  Obsidian theme manifest for BRAT
+theme.css      self-contained Obsidian theme stylesheet for BRAT
+fonts/         Inria Sans source files used to build the embedded CSS
+plugin/        Obsidian plugin — transclusion blocks, taxon prefixes, 1.1 numbering
+scripts/       install.sh and distribution verification helpers
 ```
 
 ## Install
@@ -24,6 +26,34 @@ scripts/   install.sh — symlinks both into a vault
 Then enable **Appearance → Themes → Forester** and **Community plugins →
 Forester**. The script links rather than copies, so `npm run dev` in `plugin/`
 is picked up by a reload.
+
+### BRAT
+
+This repository contains a theme and a companion plugin. Add the repository
+URL separately in both BRAT lists:
+
+```text
+https://github.com/ryoryoryo3838/obsidian-forester-theme
+```
+
+1. In **BRAT → Beta Themes → Add Beta Theme**, add the URL.
+2. In **BRAT → Beta Plugins → Add a beta plugin for testing**, add the same URL.
+3. Enable **Appearance → Themes → Forester**.
+4. Enable **Community plugins → Forester**.
+
+The theme is read from the repository root. The plugin is read from the latest
+GitHub Release, whose assets are produced by pushing a version tag.
+
+Before creating a release, set the same version in `manifest.json`,
+`plugin/manifest.json`, and `plugin/package.json`, then run:
+
+```sh
+git tag 0.1.1
+git push origin 0.1.1
+```
+
+Tags may also use the `v0.1.1` spelling. The release workflow removes that
+leading `v` and refuses to release when any manifest version differs.
 
 ### Mobile
 
@@ -235,5 +265,5 @@ Obsidian-native form is the one to write in the vault.
   the font on the machine instead — it comes with Windows, and is otherwise at
   <https://github.com/googlefonts/morisawa-biz-ud-mincho> — or the stack falls
   back to the platform mincho, and on Android, which bundles none, to the
-  platform serif. Inria Sans is shipped here and covers the hero, the
+  platform serif. Inria Sans is embedded in the root `theme.css` and covers the hero, the
   navigation and the metadata on both sides.
