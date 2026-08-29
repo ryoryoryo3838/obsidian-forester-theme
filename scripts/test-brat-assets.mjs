@@ -18,12 +18,14 @@ const manifest = JSON.parse(await readFile(file("manifest.json"), "utf8"));
 assert.equal(manifest.name, "Forester");
 
 const css = await readFile(file("theme.css"), "utf8");
-const dataUrls = css.match(/url\("data:font\/woff2;base64,[A-Za-z0-9+/=]+"\)/g) ?? [];
-assert.equal(dataUrls.length, fontNames.length);
 assert.doesNotMatch(css, /url\(["']?fonts\/[^"')]+/);
 
 for (const name of fontNames) {
-  await access(file(`fonts/${name}`));
+  const payload = (await readFile(file(`fonts/${name}`))).toString("base64");
+  assert.ok(
+    css.includes(`url("data:font/woff2;base64,${payload}")`),
+    `missing embedded font data for ${name}`,
+  );
 }
 
 console.log("BRAT theme assets are self-contained");
