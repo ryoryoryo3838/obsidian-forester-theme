@@ -18,6 +18,8 @@ const manifest = JSON.parse(await readFile(file("manifest.json"), "utf8"));
 assert.equal(manifest.name, "Forester");
 
 const css = await readFile(file("theme.css"), "utf8");
+const dataUrls = css.match(/url\("data:font\/woff2;base64,[A-Za-z0-9+/=]+"\)/g) ?? [];
+assert.equal(dataUrls.length, 6);
 assert.doesNotMatch(css, /url\(["']?fonts\/[^"')]+/);
 
 for (const name of fontNames) {
