@@ -5,5 +5,4 @@ plugin/test/build/
 plugin/data.json
 .devbox/
 /.claude
-/theme/fonts
 .worktrees/
