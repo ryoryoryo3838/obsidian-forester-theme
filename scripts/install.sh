@@ -24,6 +24,18 @@ case ${1-} in
 esac
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+for required in manifest.json theme.css plugin/main.js; do
+  if [ ! -f "$repo/$required" ]; then
+    if [ "$required" = plugin/main.js ]; then
+      echo "plugin/main.js is missing; run 'npm run build' in plugin/ first" >&2
+    else
+      echo "$required is missing from the repository root" >&2
+    fi
+    exit 1
+  fi
+done
+
 vault=${1:-$HOME/wiki.miya-lis.net}
 
 if [ ! -d "$vault/.obsidian" ]; then
@@ -33,11 +45,6 @@ fi
 
 theme_dir=$vault/.obsidian/themes/Forester
 plugin_dir=$vault/.obsidian/plugins/forester
-
-if [ ! -f "$repo/plugin/main.js" ]; then
-	echo "plugin/main.js is missing; run 'npm run build' in plugin/ first" >&2
-	exit 1
-fi
 
 mkdir -p "$vault/.obsidian/themes" "$vault/.obsidian/plugins"
 
@@ -53,17 +60,20 @@ replace() {
 if [ "$mode" = link ]; then
 	replace "$theme_dir"
 	replace "$plugin_dir"
-	ln -s "$repo/theme" "$theme_dir"
+	mkdir -p "$theme_dir"
+	ln -s "$repo/manifest.json" "$theme_dir/manifest.json"
+	ln -s "$repo/theme.css" "$theme_dir/theme.css"
 	ln -s "$repo/plugin" "$plugin_dir"
-	echo "linked $theme_dir -> $repo/theme"
+	echo "linked $theme_dir -> $repo/{manifest.json,theme.css}"
 	echo "linked $plugin_dir -> $repo/plugin"
 else
 	[ -L "$theme_dir" ] && rm -f "$theme_dir"
 	[ -L "$plugin_dir" ] && rm -f "$plugin_dir"
-	mkdir -p "$theme_dir/fonts" "$plugin_dir"
+	mkdir -p "$theme_dir" "$plugin_dir"
 
-	cp "$repo/theme/manifest.json" "$repo/theme/theme.css" "$theme_dir/"
-	cp "$repo/theme/fonts/"*.woff2 "$theme_dir/fonts/"
+	[ -L "$theme_dir/manifest.json" ] && rm -f "$theme_dir/manifest.json"
+	[ -L "$theme_dir/theme.css" ] && rm -f "$theme_dir/theme.css"
+	cp "$repo/manifest.json" "$repo/theme.css" "$theme_dir/"
 	cp "$repo/plugin/manifest.json" "$repo/plugin/main.js" \
 		"$repo/plugin/styles.css" "$plugin_dir/"
 
