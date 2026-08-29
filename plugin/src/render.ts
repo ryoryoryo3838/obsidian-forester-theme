@@ -177,10 +177,14 @@ export function buildHeader(
 	const taxon = buildTaxonSpan(doc, options);
 	if (taxon) h1.appendChild(taxon);
 
-	const titleSpan = doc.createElement("span");
-	titleSpan.className = "forester-title";
-	titleSpan.textContent = title;
-	h1.appendChild(titleSpan);
+	// A subtree opened by `<!-- hN -->` has no `\title`, so there is no span to
+	// write; the taxon, the number and the `[slug]` carry the whole header.
+	if (title.length > 0) {
+		const titleSpan = doc.createElement("span");
+		titleSpan.className = "forester-title";
+		titleSpan.textContent = title;
+		h1.appendChild(titleSpan);
+	}
 
 	const slug = buildSlug(doc, options.uri);
 	if (slug) {

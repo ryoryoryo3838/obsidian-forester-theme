@@ -82,9 +82,37 @@ body.forester-enabled.theme-dark {
 	display: none;
 }
 
-/* The transcluded tree's own `# Title` is promoted into the header above it. */
-.forester-enabled .forester-promoted-title {
+/* The transcluded tree's own `# Title` is promoted into the header above it,
+   and so is the metadata line the reading-view pass hangs underneath it. */
+.forester-enabled .forester-promoted-title,
+.forester-enabled .forester-promoted-title + .metadata {
 	display: none;
+}
+
+/* ── spliced ranges ───────────────────────────────────────────────────────── */
+/* `![[note#^id]]` and `![[note#heading]]` address a subtree, whose extent ends
+   at `<!-- /hN -->`. Obsidian cannot know that, so the body is laid out again
+   from the source lines and shown instead of the one it rendered.
+   Instead of: Obsidian keeps ownership of `.markdown-embed-content` and rebuilds
+   it whenever it likes, so ours lives beside it and its own is hidden. */
+
+.forester-enabled .internal-embed.forester-spliced > .markdown-embed-content {
+	display: none;
+}
+
+.forester-enabled .forester-range > :first-child {
+	margin-top: 0;
+}
+
+.forester-enabled .forester-range > :last-child {
+	margin-bottom: 0;
+}
+
+/* A subtree opened by `<!-- hN -->` renders as nothing at all, so its own note
+   would show neither number nor address. The header hangs off the comment. */
+.forester-enabled .forester-subtree-marker {
+	display: block;
+	margin-top: 0.5em;
 }
 
 /* ── details / summary ────────────────────────────────────────────────────── */

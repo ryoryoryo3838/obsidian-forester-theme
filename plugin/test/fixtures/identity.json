@@ -1,0 +1,113 @@
+{
+  "//": [
+    "Shared fixtures for the identity rules. The plugin and tree-md have to",
+    "reach the same conclusion from the same source, or the vault and the",
+    "published site show different addresses — which is the one thing this",
+    "project exists to prevent.",
+    "",
+    "The plugin side runs these in test/identity.test.mjs. The tree-md side",
+    "should read this same file from its Alcotest suite, so that changing a rule",
+    "in one repository fails the other."
+  ],
+
+  "notes": [
+    {
+      "path": "MIYA-LIS.NET/information-concept.tree.md",
+      "frontmatter": { "id": "mlnet-7" },
+      "identity": "mlnet-7",
+      "stem": "information-concept",
+      "why": "an id is stated, so the file name is only the search key"
+    },
+    {
+      "path": "MIYA-LIS.NET/aboutme.tree.md",
+      "frontmatter": {},
+      "identity": "aboutme",
+      "stem": "aboutme",
+      "why": "no id, so the file name stands as the address"
+    },
+    {
+      "path": "notes.md",
+      "frontmatter": {},
+      "identity": "notes",
+      "stem": "notes",
+      "why": "a plain .md note is addressed the same way"
+    },
+    {
+      "path": "a/deep/place.tree.md",
+      "frontmatter": {},
+      "identity": "place",
+      "stem": "place",
+      "why": "the identity is the file name, never the path"
+    },
+    {
+      "path": "MIYA-LIS.NET/shadow.tree.md",
+      "frontmatter": { "id": "not an identity" },
+      "identity": "shadow",
+      "stem": "shadow",
+      "why": "an id that is not a legal identity is not one"
+    }
+  ],
+
+  "resolution": [
+    { "target": "mlnet-7", "identity": "mlnet-7", "step": "identity" },
+    { "target": "mlnet-7.tree", "identity": "mlnet-7", "step": "identity without .tree" },
+    { "target": "information-concept", "identity": "mlnet-7", "step": "file name" },
+    {
+      "target": "information-concept.tree",
+      "identity": "mlnet-7",
+      "step": "file name without .tree",
+      "why": "the spelling Obsidian writes for information-concept.tree.md"
+    },
+    { "target": "aboutme", "identity": "aboutme", "step": "file name" },
+    { "target": "aboutme.tree", "identity": "aboutme", "step": "file name without .tree" },
+    { "target": "missing", "identity": null, "step": "unresolvable" },
+    { "target": "missing.tree", "identity": null, "step": "unresolvable" }
+  ],
+
+  "identityGrammar": {
+    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+    "accepts": ["mlnet-7", "0073", "007H", "a", "a.b_c-d", "1"],
+    "rejects": ["", "-leading", ".leading", "_leading", "has space", "has/slash", "has#hash"]
+  },
+
+  "addresses": {
+    "//": "The [id] policy, and what it encodes to. 269 -> 007H is a real published address.",
+    "policy": {
+      "alphabet": "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "width": 4,
+      "prefix": ""
+    },
+    "encodes": [
+      [0, "0000"],
+      [1, "0001"],
+      [35, "000Z"],
+      [36, "0010"],
+      [182, "0052"],
+      [255, "0073"],
+      [269, "007H"],
+      [1679615, "ZZZZ"],
+      [1679616, "10000"]
+    ]
+  },
+
+  "subtreeNaming": {
+    "//": "Four spellings, one meaning. Naming a subtree twice is an error.",
+    "equivalent": [
+      ["<!-- subtree: sec -->", "## Heading"],
+      ["<!-- id: sec -->", "## Heading"],
+      ["## Heading ^sec"],
+      ["<!-- h2:sec -->"]
+    ],
+    "conflict": [["<!-- subtree: sec -->", "## Heading ^sec"]]
+  },
+
+  "anchors": {
+    "//": "Only a token ending a block, and only after a space or the start.",
+    "stripped": [
+      ["A remark. ^aside", "A remark.", "aside"],
+      ["^aside", "", "aside"],
+      ["## Heading ^sec", "## Heading", "sec"]
+    ],
+    "kept": ["the value x^2", "x^2 is not an anchor", "a^b ^ c"]
+  }
+}

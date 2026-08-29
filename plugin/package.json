@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
-    "test": "esbuild src/forest.ts --bundle --format=esm --outfile=test/build/forest.mjs --external:obsidian --log-level=warning && node test/numbering.test.mjs"
+    "test": "esbuild src/forest.ts src/mint.ts --bundle --format=esm --outdir=test/build --out-extension:.js=.mjs --external:obsidian --log-level=warning && node test/numbering.test.mjs && node test/identity.test.mjs && node test/save.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
