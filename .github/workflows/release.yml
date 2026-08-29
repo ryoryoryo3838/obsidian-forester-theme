@@ -43,5 +43,6 @@ jobs:
             plugin/manifest.json \
             plugin/main.js \
             plugin/styles.css \
+            --verify-tag \
             --title "$GITHUB_REF_NAME" \
             --generate-notes

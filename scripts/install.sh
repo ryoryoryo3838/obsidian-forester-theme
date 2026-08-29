@@ -58,10 +58,14 @@ replace() {
 }
 
 if [ "$mode" = link ]; then
-	replace "$theme_dir"
-	replace "$plugin_dir"
-	mkdir -p "$theme_dir"
-	ln -s "$repo/manifest.json" "$theme_dir/manifest.json"
+  if [ -L "$theme_dir" ] || { [ -e "$theme_dir" ] && [ ! -d "$theme_dir" ]; }; then
+    replace "$theme_dir"
+  fi
+  replace "$plugin_dir"
+  mkdir -p "$theme_dir"
+  replace "$theme_dir/manifest.json"
+  replace "$theme_dir/theme.css"
+  ln -s "$repo/manifest.json" "$theme_dir/manifest.json"
 	ln -s "$repo/theme.css" "$theme_dir/theme.css"
 	ln -s "$repo/plugin" "$plugin_dir"
 	echo "linked $theme_dir -> $repo/{manifest.json,theme.css}"

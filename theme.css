@@ -12,7 +12,8 @@
 /* ── Fonts ────────────────────────────────────────────────────────────────── */
 /* style.css sets prose in BIZ UDMincho and names Inria Sans explicitly for the
    hero, the navigation, and the metadata. Inria Sans ships with this theme, as
-   .woff2 next to this file; see README for how they get there.
+   .woff2 source files live under fonts/; runtime uses embedded data URLs. See
+   README for how they get there.
 
    BIZ UDMincho does not. The site serves it as 248 unicode-range slices — 8MB
    on disk — which is right for a page a stranger loads once and wrong for a
