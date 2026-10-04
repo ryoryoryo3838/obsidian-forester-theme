@@ -44,5 +44,7 @@ jobs:
             plugin/main.js \
             plugin/styles.css \
             --verify-tag \
+            --prerelease \
+            --latest=false \
             --title "$GITHUB_REF_NAME" \
             --generate-notes

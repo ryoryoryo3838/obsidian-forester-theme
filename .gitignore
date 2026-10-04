@@ -2,6 +2,8 @@ node_modules/
 plugin/main.js
 plugin/main.js.map
 plugin/test/build/
+plugin/test/*.log
+plugin/dist/
 plugin/data.json
 .devbox/
 /.claude

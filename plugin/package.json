@@ -1,19 +1,28 @@
 {
   "name": "obsidian-forester",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "description": "Forester tree visuals for Obsidian",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
-    "test": "esbuild src/forest.ts src/mint.ts --bundle --format=esm --outdir=test/build --out-extension:.js=.mjs --external:obsidian --log-level=warning && node test/numbering.test.mjs && node test/identity.test.mjs && node test/save.test.mjs"
+    "test": "npm run test:legacy && npm run test:hybrid",
+    "test:legacy": "esbuild src/forest.ts src/mint.ts --bundle --format=esm --outdir=test/build --out-extension:.js=.mjs --external:obsidian --log-level=warning && node test/numbering.test.mjs && node test/identity.test.mjs && node test/save.test.mjs",
+    "test:hybrid": "esbuild src/hybrid-core.ts src/hybrid-public.ts src/hybrid-display.ts src/hybrid-save.ts src/hybrid-editor.ts src/hybrid-config.ts --bundle --format=esm --platform=node --outdir=test/build --out-extension:.js=.mjs --external:@codemirror/state --external:@codemirror/view --log-level=warning && npm run build:public && node test/run-hybrid-controller.mjs test/hybrid-core.test.mjs test/hybrid-public.test.mjs test/hybrid-display.test.mjs test/hybrid-save.test.mjs test/hybrid-editor.test.mjs test/hybrid-config.test.mjs test/hybrid-integration.test.mjs test/hybrid-review-regression.test.mjs test/hybrid-math-regression.test.mjs test/hybrid-second-review-public.test.mjs test/hybrid-second-review-ui.test.mjs test/hybrid-acceptance-cr.test.mjs test/hybrid-acceptance-buffers.test.mjs test/hybrid-main.test.mjs test/hybrid-cli.test.mjs",
+    "build:public": "esbuild scripts/project-public.ts --bundle --format=esm --platform=node --outfile=dist/project-public.mjs",
+    "test:browser": "esbuild test/hybrid-browser-entry.ts --bundle --format=iife --platform=browser --outfile=test/build/hybrid-browser.js && node test/hybrid-browser.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "builtin-modules": "^4.0.0",
     "esbuild": "^0.25.0",
+    "linkedom": "0.18.12",
     "obsidian": "^1.8.7",
+    "playwright-core": "1.63.0",
     "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "yaml": "2.9.1"
   }
 }

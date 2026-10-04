@@ -39,6 +39,8 @@ import {
 	retargetHeadingRefs,
 } from "./mint";
 import { DEFAULT_SETTINGS, ForesterSettingTab, type ForesterSettings } from "./settings";
+import { HybridController } from './hybrid-controller';
+import { hybridOptions } from './hybrid-config';
 
 /** Marks elements we have already rewritten so passes stay idempotent. */
 const DONE = "data-forester";
@@ -49,6 +51,7 @@ const LOCAL = "data-forester-local";
 
 export default class ForesterPlugin extends Plugin {
 	settings: ForesterSettings = { ...DEFAULT_SETTINGS };
+  private hybridController?: HybridController;
 
 	private trees = new Map<string, { source?: string; tree: DocumentTree }>();
 	/** Raw text per note. Directives live in comments, which the cache drops. */
@@ -64,6 +67,8 @@ export default class ForesterPlugin extends Plugin {
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		this.applySettingsToDom();
+    this.hybridController = new HybridController(this, () => this.settings.hybrid);
+    await this.hybridController.initialize();
 
 		// Reading view: headings, the root title, and depth indentation.
 		this.registerMarkdownPostProcessor((el, ctx) => this.processReadingSection(el, ctx));
@@ -127,7 +132,11 @@ export default class ForesterPlugin extends Plugin {
 		this.addCommand({
 			id: "mint-subtree-address",
 			name: "Mint address for subtree at cursor",
-			editorCallback: (editor) => this.mintSubtreeAddress(editor),
+			editorCallback: (editor, view) => this.mintSubtreeAddress(editor, view.file).catch(error => {
+        // Native editor callbacks need not await their result; always handle the async IO failure here.
+        console.error('Forester: failed to mint subtree address', error);
+        new Notice(`Forester: subtree address mint failed — ${error instanceof Error ? error.message : String(error)}`);
+      }),
 		});
 
 		this.addCommand({
@@ -169,12 +178,14 @@ export default class ForesterPlugin extends Plugin {
 
 	async loadSettings(): Promise<void> {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    this.settings.hybrid = hybridOptions(this.settings.hybrid);
 		// Briefly spelled `all`, when it also addressed every heading.
 		if ((this.settings.mintOnSave as string) === "all") this.settings.mintOnSave = "notes";
 	}
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+    await this.hybridController?.refresh();
 		this.applySettingsToDom();
 		this.applySaveHook();
 	}
@@ -194,6 +205,8 @@ export default class ForesterPlugin extends Plugin {
 
 	private treeFor(file: TFile): DocumentTree | null {
 		const source = this.sourceOf(file);
+    // The hybrid controller owns these files; legacy identity/metadata rules must not rewrite them.
+    if (this.hybridController?.isEnabled(file.path, source)) return null;
 
 		// Directives live in HTML comments, which the metadata cache drops, so a
 		// tree built with the raw text supersedes one built without it.
@@ -288,6 +301,56 @@ export default class ForesterPlugin extends Plugin {
 		this.register(() => this.unhookSave?.());
 	}
 
+  /** Legacy writes respect raw disk text and every open editor's unsaved opt-in. */
+  private hybridOwns(file: TFile, source: string): boolean {
+    const controller = this.hybridController;
+    if (!controller) return false;
+    if (controller.isEnabled(file.path, source)) return true;
+
+    const editors = new Set<Editor>();
+    let unreadable = false;
+    const collect = (info: { file?: TFile | null; editor?: Editor } | null | undefined): void => {
+      if (info?.file?.path !== file.path) return;
+      try {
+        const editor = info.editor;
+        if (editor) editors.add(editor);
+      } catch {
+        unreadable = true; // A known matching buffer cannot grant permission when unavailable.
+      }
+    };
+    const workspace = this.app.workspace;
+    collect(workspace.activeEditor);
+    const leaves = new Set(workspace.getLeavesOfType('markdown'));
+    workspace.iterateAllLeaves?.(leaf => leaves.add(leaf));
+    for (const leaf of leaves) {
+      collect(leaf.view as { file?: TFile | null; editor?: Editor });
+    }
+    if (unreadable) return true;
+    return [...editors].some(editor => {
+      let live: string;
+      try { live = editor.getValue(); } catch { return true; }
+      // Keep parser/legacy errors outside the editor-access catch.
+      return typeof live !== 'string' || controller.isEnabled(file.path, live);
+    });
+  }
+
+  private async writeLegacyNoteAddress(file: TFile, address: string): Promise<boolean> {
+    const refused = new Error('Hybrid-owned note');
+    try {
+      await this.app.fileManager.processFrontMatter(file, frontmatter => {
+        // This API supplies current parsed frontmatter, not raw text. JSON flow mappings are YAML.
+        const mode = `---\n${JSON.stringify({ 'forester-mode': frontmatter['forester-mode'] })}\n---\n`;
+        // Throw to stop native serialization too, even if the callback did not change any keys.
+        if (this.hybridOwns(file, mode)) throw refused;
+        frontmatter['id'] = address;
+      });
+      return true;
+    } catch (error) {
+      if (error === refused) return false;
+      throw error;
+    }
+  }
+
 	/**
 	 * Fill in the addresses this note asked for. Only ever additive: an address
 	 * that is written is never minted over, and on `requests` nothing that stated
@@ -298,6 +361,7 @@ export default class ForesterPlugin extends Plugin {
 
 		const file = this.app.workspace.getActiveFile();
 		if (!file || file.extension !== "md") return;
+    if (this.hybridOwns(file, await this.app.vault.read(file))) return;
 
 		const policy = this.settings.address;
 		if (checkPolicy(policy) !== null) return;
@@ -318,15 +382,13 @@ export default class ForesterPlugin extends Plugin {
 		const asked = "id" in (this.app.metadataCache.getFileCache(file)?.frontmatter ?? {});
 		if (!stated && (asked || mode === "notes")) {
 			const address = draw();
-			await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
-				frontmatter["id"] = address;
-			});
-			minted++;
+			if (await this.writeLegacyNoteAddress(file, address)) minted++;
 		}
 
 		// Requests in the body, which the front-matter pass cannot see.
 		let problems: string[] = [];
 		await this.app.vault.process(file, (data) => {
+      if (this.hybridOwns(file, data)) return data;
 			const lines = data.split("\n");
 
 			// Names first: a heading named by a directive is moved onto the heading,
@@ -351,6 +413,7 @@ export default class ForesterPlugin extends Plugin {
 
 		let fixed = 0;
 		await this.app.vault.process(file, (data) => {
+      if (this.hybridOwns(file, data)) return data;
 			const lines = data.split("\n");
 			fixed = retargetHeadingRefs(lines, (path, heading) =>
 				this.retargetOf(file, path, heading),
@@ -387,7 +450,9 @@ export default class ForesterPlugin extends Plugin {
 	 * address has to be written there rather than here.
 	 */
 	private async addressReferencedHeadings(from: TFile, draw: () => string): Promise<number> {
-		const text = await this.app.vault.cachedRead(from);
+		const text = await this.app.vault.read(from);
+    // The source may have opted in while the caller's earlier IO was pending.
+    if (this.hybridOwns(from, text)) return 0;
 		let minted = 0;
 		const done = new Set<string>();
 
@@ -399,6 +464,7 @@ export default class ForesterPlugin extends Plugin {
 			const target =
 				ref.path.length === 0 ? from : this.resolveTarget(ref.path, from);
 			if (!target || target.extension !== "md") continue;
+      if (this.hybridOwns(target, await this.app.vault.read(target))) continue;
 
 			// Read it now rather than asking and settling next time: the answer is
 			// needed in this pass, and a reference the author just wrote is exactly
@@ -412,9 +478,13 @@ export default class ForesterPlugin extends Plugin {
 			if (this.addressOfHeading(from, ref.path, ref.heading) !== null) continue;
 			if (this.isRootTitle(from, ref.path, ref.heading)) continue;
 
+      // Retire a stale request, including a saved opt-in made during target IO.
+      const currentFrom = await this.app.vault.read(from);
+      if (currentFrom !== text || this.hybridOwns(from, currentFrom)) break;
 			const address = draw();
 			let placed = false;
 			await this.app.vault.process(target, (data) => {
+        if (this.hybridOwns(from, text) || this.hybridOwns(target, data)) return data;
 				const lines = data.split("\n");
 				placed = anchorHeading(lines, ref.heading, address);
 				if (!placed) return data;
@@ -491,8 +561,10 @@ export default class ForesterPlugin extends Plugin {
 			// Only notes we hold the text of; the rest are asked for and settle on
 			// a later pass rather than being read synchronously here.
 			if (this.sources.get(file.path) === undefined) continue;
+      if (this.hybridOwns(file, await this.app.vault.read(file))) continue;
 
 			await this.app.vault.process(file, (data) => {
+        if (this.hybridOwns(file, data)) return data;
 				const lines = data.split("\n");
 				const count = retargetHeadingRefs(lines, (path, heading) =>
 					this.addressOfHeading(file, path, heading),
@@ -543,8 +615,9 @@ export default class ForesterPlugin extends Plugin {
 	 * Write an `id` into this note's front matter. A note that already states one
 	 * keeps it: the whole point of an address is that nothing moves it.
 	 */
-	private mintNoteAddress(file: TFile | null): void {
+	private async mintNoteAddress(file: TFile | null): Promise<void> {
 		if (!file) return;
+    if (this.hybridOwns(file, await this.app.vault.read(file))) return;
 
 		const declared = this.app.metadataCache.getFileCache(file)?.frontmatter?.["id"];
 		if (typeof declared === "string" && IDENTITY.test(declared)) {
@@ -555,9 +628,7 @@ export default class ForesterPlugin extends Plugin {
 		const address = this.newAddress();
 		if (!address) return;
 
-		void this.app.fileManager.processFrontMatter(file, (frontmatter) => {
-			frontmatter["id"] = address;
-		});
+		if (!await this.writeLegacyNoteAddress(file, address)) return;
 		new Notice(`Forester: minted ${address}`);
 	}
 
@@ -566,9 +637,31 @@ export default class ForesterPlugin extends Plugin {
 	 * `## Heading ^NNNN` — because that is the one Obsidian can also address; a
 	 * `<!-- id -->` request is answered in place.
 	 */
-	private mintSubtreeAddress(editor: Editor): void {
-		const line = editor.getCursor().line;
-		const opener = this.subtreeOpenerAt(editor, line);
+	private async mintSubtreeAddress(editor: Editor, file: TFile | null): Promise<void> {
+    // Without a bound file there is no saved ownership to verify (native ctx.file may be null).
+    if (!file) return;
+    const workspace = this.app.workspace, path = file.path;
+    let active: typeof workspace.activeEditor, before: string, cursor: { line: number; ch: number };
+    try {
+      active = workspace.activeEditor;
+      before = editor.getValue();
+      cursor = { ...editor.getCursor() };
+    } catch { return; }
+    // The same view can be reused for a different note while native IO is pending.
+    const stillCurrent = (): boolean => {
+      try {
+        const current = editor.getCursor();
+        return workspace.activeEditor === active && active?.editor === editor &&
+          active.file?.path === path && file.path === path && editor.getValue() === before &&
+          current.line === cursor.line && current.ch === cursor.ch;
+      } catch { return false; }
+    };
+    const source = await this.app.vault.read(file);
+    if (!stillCurrent() || this.hybridOwns(file, source)) return;
+    // Resample raw disk after the first async read; this is not a filesystem transaction.
+    const latest = await this.app.vault.read(file);
+    if (latest !== source || !stillCurrent() || this.hybridOwns(file, latest)) return;
+		const opener = this.subtreeOpenerAt(editor, cursor.line);
 		if (opener === null) {
 			new Notice("Forester: no subtree opens above the cursor");
 			return;
@@ -596,6 +689,7 @@ export default class ForesterPlugin extends Plugin {
 			return;
 		}
 
+    if (this.hybridOwns(file, latest) || !stillCurrent()) return;
 		editor.setLine(opener, replacement);
 
 		// A directive names the subtree for tree-md, but Obsidian addresses a

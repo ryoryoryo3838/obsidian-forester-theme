@@ -1,8 +1,11 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type ForesterPlugin from "./main";
 import { DEFAULT_POLICY, checkPolicy, encode, type AddressPolicy } from "./mint";
+import { DEFAULT_HYBRID, type HybridOptions } from "./hybrid-types";
 
 export interface ForesterSettings {
+  /** Opt-in dialect scope and independent publication allowlist. Empty means private/disabled. */
+  hybrid: HybridOptions;
 	/** Rewrite `![[x]]` into a Forester transclusion block. */
 	transclusionHeaders: boolean;
 	/** Prefix subtree titles with `Taxon 1.2. `. */
@@ -36,6 +39,7 @@ export interface ForesterSettings {
 }
 
 export const DEFAULT_SETTINGS: ForesterSettings = {
+  hybrid: { ...DEFAULT_HYBRID, folders: [], publicFolders: [], reservedIds: [] },
 	transclusionHeaders: true,
 	numberSubtrees: true,
 	showSlugs: true,
@@ -53,6 +57,20 @@ export class ForesterSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+
+    containerEl.createEl('h3', {text:'Hybrid Markdown (opt-in)'});
+    const lists: Array<[keyof HybridOptions,string,string]> = [
+      ['folders','Hybrid folders','One vault-relative folder per line. Empty disables the dialect by default. Use / only to intentionally enable the whole vault. A note can override with forester-mode: true/false.'],
+      ['publicFolders','Public folders','Separate from syntax enablement. Default is private. Every file placed in these folders inherits public status; only opt-in files are projected. No automatic upload occurs.'],
+      ['reservedIds','Reserved IDs','Additional IDs excluded from automatic generation. Decimal-only six-digit IDs are always reserved; automatic IDs are uppercase six-hex.']
+    ];
+    for (const [key,name,description] of lists) new Setting(containerEl).setName(name).setDesc(description).addTextArea(input =>
+      input.setValue(this.plugin.settings.hybrid[key].join('\n')).onChange(async value => {
+        this.plugin.settings.hybrid[key] = value.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
+        await this.plugin.saveSettings();
+      })
+    );
+    containerEl.createEl('p',{cls:'setting-item-description',text:'Use “Check hybrid trees” for local diagnostics and “Preview public projection” to validate the public subset. Raw Forester is highlighted, not executed. Citation fields: citation-authors and publication-year.'});
 
 		new Setting(containerEl)
 			.setName("Transclusion headers")

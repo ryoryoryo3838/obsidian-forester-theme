@@ -22,6 +22,19 @@ body.forester-enabled.theme-dark {
 	--forester-slug: #888;
 }
 
+/* Opt-in hybrid decorations use the current Obsidian theme, not fixed page colours. */
+.hybrid-taxon-number { color: var(--text-accent); font-size: .85em; margin-inline-end: .4em; }
+.hybrid-embed { border-inline-start: 2px solid var(--background-modifier-border); padding-inline-start: .75em; margin-block: .4em; }
+.hybrid-embed h3 { margin-block: .25em; }
+.hybrid-raw { white-space: pre-wrap; border-radius: var(--radius-s); background: var(--background-secondary); padding: .15em .3em; }
+.hybrid-raw-label { color: var(--text-muted); font-size: .7em; margin-inline-end: .6em; }
+.hybrid-token-command { color: var(--code-function); }
+.hybrid-token-delimiter { color: var(--code-punctuation); }
+.hybrid-token-comment { color: var(--code-comment); }
+.hybrid-token-verbatim { color: var(--code-string); }
+.hybrid-error { color: var(--text-error); }
+.hybrid-citation a { color: var(--link-color); cursor: pointer; }
+
 /* ── .block ───────────────────────────────────────────────────────────────── */
 /* style.css: .block { padding-left:5px; padding-right:10px; padding-bottom:2px;
    border-radius:5px } and .block:hover { background: rgba(0,100,255,.04) } */
