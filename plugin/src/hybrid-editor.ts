@@ -1,13 +1,30 @@
-import { EditorState, StateEffect, StateField, type Extension, type Range } from '@codemirror/state';
+import { EditorState, Prec, StateEffect, StateField, type Extension, type Range } from '@codemirror/state';
 import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view';
-import type { HybridDocument, HybridResolution } from './hybrid-types';
-import { planDisplay, foresterTokens, treeOutline, type OutlineEntry, type DisplaySpan, type EmbedFlags } from './hybrid-display';
+import type { HybridDocument, HybridResolution, HybridTree } from './hybrid-types';
+import { planDisplay, rootHeadingAt, foresterTokens, treeOutline, type OutlineEntry, type DisplaySpan, type EmbedFlags } from './hybrid-display';
+import { appendTaxon, appendSlug, renderMetadata, renderTreeHeader } from './hybrid-header';
 export const hybridRefresh = StateEffect.define<null>();
 export interface HybridEditorHost {
   document(state:EditorState): HybridDocument | null;
   resolve(target:string,path:string): HybridResolution;
   renderEmbed(el:HTMLElement,target:string,flags:EmbedFlags,path:string): (()=>void) | void;
   open(target:string,path:string): void;
+}
+class HeaderPart extends WidgetType {
+  private cleanups:Array<()=>void>=[];
+  constructor(private tree:HybridTree,private kind:'taxon'|'slug'|'metadata'|'header',private headerLabel:string,private host:HybridEditorHost){super();}
+  eq(other:HeaderPart):boolean{if(this.kind==='metadata'||this.kind==='header')return false; /* resolved relation labels can change without local metadata edits */ return this.kind===other.kind&&this.headerLabel===other.headerLabel&&this.tree.id===other.tree.id&&this.tree.path===other.tree.path&&JSON.stringify(this.tree.meta)===JSON.stringify(other.tree.meta);}
+  toDOM():HTMLElement {
+    const el=document.createElement(this.kind==='slug'?'span':'div');el.className=`hybrid-header-${this.kind}`;
+    const host={resolve:(target:string,path:string)=>this.host.resolve(target,path),open:(target:string,path:string)=>this.host.open(target,path),register:(cleanup:()=>void)=>this.cleanups.push(cleanup)};
+    if(this.kind==='taxon')appendTaxon(el,this.tree,this.headerLabel);
+    else if(this.kind==='slug')appendSlug(el,this.tree,host);
+    else if(this.kind==='metadata'){const metadata=renderMetadata(document,this.tree,host);if(metadata)el.append(metadata);}
+    else el.append(renderTreeHeader(document,this.tree,this.headerLabel,host));
+    return el;
+  }
+  destroy():void{for(const cleanup of this.cleanups.splice(0))cleanup();}
+  ignoreEvent():boolean{return true;}
 }
 class Label extends WidgetType {
   constructor(private label:string) {super();}
@@ -70,11 +87,21 @@ export function createHybridEditor(host:HybridEditorHost):Extension {
     const ranges:Range<Decoration>[]=[];
     const entries=treeOutline(doc,(target,path)=>host.resolve(target,path??doc.path));
     if(entries.length)ranges.push(Decoration.widget({widget:new TocWidget(entries,doc.path,host),block:true,side:-1}).range(Math.min(doc.root.contentFrom,state.doc.length)));
-    for(const h of plan.headings){
-      if(h.at>state.doc.length)continue;
-      const at=state.doc.lineAt(h.at).from;
-      ranges.push(Decoration.line({class:'hybrid-tree-heading'}).range(at));
-      if(h.label)ranges.push(Decoration.widget({widget:new Label(h.label),side:-1}).range(at));
+    const labels=new Map(plan.headings.map(h=>[h.at,h.label]));
+    for(const tree of doc.trees){
+      const position=tree===doc.root?rootHeadingAt(doc):tree.from;
+      if(position===null)continue;
+      if(position>state.doc.length)continue;
+      const line=state.doc.lineAt(position),active=selected.some(s=>s.from<=line.to&&s.to>=line.from);
+      ranges.push(Decoration.line({class:'hybrid-tree-heading'}).range(line.from));
+      const label=tree===doc.root?tree.meta.taxon??'':labels.get(tree.from)??'';
+      if(label)ranges.push(Decoration.widget({widget:tree===doc.root?new HeaderPart(tree,'taxon',label,host):new Label(label),block:tree===doc.root,side:-1}).range(line.from));
+      if(tree.id&&!active){
+        const suffix=new RegExp('\\s+\\^'+tree.id+'\\s*$').exec(line.text);
+        const widget=new HeaderPart(tree,'slug','',host);
+        ranges.push(suffix?Decoration.replace({widget}).range(line.from+suffix.index,line.to):Decoration.widget({widget,side:1}).range(line.to));
+      }
+      if(tree.meta.authors.length||tree.meta.dates.length)ranges.push(Decoration.widget({widget:new HeaderPart(tree,'metadata','',host),block:true,side:1}).range(line.to));
     }
     for(const span of plan.spans){
       if(span.to>state.doc.length||span.to<=span.from)continue;
@@ -84,5 +111,5 @@ export function createHybridEditor(host:HybridEditorHost):Extension {
     return Decoration.set(ranges,true);
   };
   const field=StateField.define<DecorationSet>({create:build,update:(value,tr)=>tr.docChanged||tr.selection||tr.reconfigured||tr.effects.some(e=>e.is(hybridRefresh))?build(tr.state):value,provide:f=>EditorView.decorations.from(f)});
-  return [field,EditorView.atomicRanges.of(view=>view.state.field(field))];
+  return [Prec.highest(field),EditorView.atomicRanges.of(view=>view.state.field(field))];
 }

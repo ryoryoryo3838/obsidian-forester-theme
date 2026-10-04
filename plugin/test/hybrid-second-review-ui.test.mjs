@@ -227,7 +227,7 @@ test('Reading embed rerenders are idempotent and unload removed renderer owners 
   for (let i = 0; i < 3; i++) { await process(el, ctx); await drain(); }
   assert.equal(renders.length, 2, 'same occurrences reuse their renderer children');
   assert.equal(ctx.children.filter(child => child.loaded).length, 2);
-  const first = el.querySelector('.internal-embed'), second = el.querySelectorAll('.internal-embed')[1];
+  const first = el.querySelector('.hybrid-managed-embed'), second = el.querySelectorAll('.hybrid-managed-embed')[1];
   const firstOwner = renders[0].component;
   first.replaceChildren(document.createTextNode('Native rerender'));
   h.app.renderOverride = async (source, body) => { assert.equal(firstOwner.loaded, false, 'old detached owner is unloaded before the new native render'); body.textContent = source; };
@@ -240,6 +240,9 @@ test('Reading embed rerenders are idempotent and unload removed renderer owners 
   assert.equal(second.querySelector('.hybrid-embed').getAttribute('data-toc'), 'true', 'partial pass does not transfer first occurrence flags to the second');
   assert.ok(renders.filter(r => r.component.loaded).every(r => el.contains(r.el)));
   const oldOwners = renders.map(r => r.component);
+  const changedBook = h.vault.data.get('Book.md') + '\nUpdated dependency.';
+  h.vault.data.set('Book.md', changedBook);
+  await h.app.metadataCache.emit('changed', h.vault.files.get('Book.md'), changedBook, {});
   await c.refresh();
   await process(el, ctx); await drain();
   assert.ok(oldOwners.every(component => !component.loaded), 'dependency generation change tears down old renderer owners');

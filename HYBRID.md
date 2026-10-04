@@ -47,7 +47,9 @@ Authors/dates inherit from the nearest parent and explicit values add to them. B
 
 Prefer Obsidian's standard Properties UI: make `authors` and `dates` list properties and enter `[[miya]]` or `[[2026-10-04]]`. Obsidian manages the YAML quotation marks on save; they do not need to be typed manually. A date-note link is a Text/List value, not Obsidian's Date-type scalar.
 
-The hybrid parser preserves quoted wikilink values and their subtree inheritance, but does **not** yet resolve person/date notes into display names or calendar values. Only plural `authors`/`dates` are recognized as hybrid attribution keys; singular `author`/`date` remain ordinary unknown frontmatter. Citation metadata is separate: `citation-authors` currently needs display-ready strings, because wikilinks there are not resolved before author-year formatting. Likewise, a wikilink-valued `taxon` is not normalized into a classification-note relation. Preservation is not full relational metadata support.
+The hybrid parser preserves quoted wikilink values and their subtree inheritance. Tree headers resolve author/date links through the shared index and use an explicit alias or the target's title; ISO date labels receive readable formatting. This does not infer calendar values from arbitrary date-note properties. Only plural `authors`/`dates` are recognized as hybrid attribution keys; singular `author`/`date` remain ordinary unknown frontmatter. Contributors and recognized native properties are preserved on the declaring tree without author/date-style inheritance. Citation metadata is separate: `citation-authors` currently needs display-ready strings, because wikilinks there are not resolved before author-year formatting. Likewise, a wikilink-valued `taxon` is not normalized into a classification-note relation. This is not full relational metadata support.
+
+`author: false` is retained as the native display flag in `properties.author`, not as an attribution alias. Retention is not a claim that the current header applies the suppression flag or renders contributors, every native property, or BibTeX. Those native presentation features remain outside this replacement's completed scope.
 
 ## Identity and settled save
 
@@ -56,6 +58,7 @@ The hybrid parser preserves quoted wikilink values and their subtree inheritance
 - Root/subtree IDs share one case-insensitive uniqueness check; source spelling is preserved. File names/aliases colliding with IDs are warnings and ambiguous bare references are not silently chosen.
 - IDs never encode a parent, section order or position.
 - On settled editing, the missing active root is addressed. A heading reference to an enabled target addresses its missing root/heading and becomes a fixed-ID reference. Public visibility islands also receive IDs as needed.
+- Ordinary links between enabled notes receive the target's semantic title as a saved wikilink label while keeping their original target spelling. Explicit labels (including empty labels), embeds and protected regions are untouched. Delimiters, line breaks and backslashes in generated labels are safely encoded. Previously generated and manual labels are not distinguishable, so later title changes do not automatically overwrite existing labels.
 
 ```markdown
 [[Note#Heading|A label]]
@@ -74,6 +77,10 @@ Legacy writes also skip a note when its disk source or any open, matching editor
 ```
 
 `h` hides the complete header, `t` omits that occurrence from the tree TOC. Only the preceding standalone embed on the same line is affected. Unknown short flags are diagnosed. Metadata/title of the definition is unchanged. The Live Preview tree TOC is collapsible and bounded; it includes transclusions unless `t` hides them. It is independent of Obsidian's core Outline pane.
+
+An addressed heading also accepts `[[B4C2D1]]` and `![[B4C2D1]]` without knowing its parent file. The ID index resolves the definition and its entire heading section, including lower-level headings until the next equal/higher-level heading. The file-qualified `![[Note#^B4C2D1]]` uses that same section, not Obsidian's default single-heading block. Different-file-name or alias collisions remain ambiguous rather than silently selecting a target; a file root and its own matching ID are one resolved identity.
+
+Native Obsidian checks on a separate two-note synthetic vault verified these Reading/Live Preview embeds, Reading click and Live Preview Ctrl-click ID navigation, and rejection of a different-file-name collision. This is narrow acceptance of these ID paths, not full native-app/mobile or production-freeze acceptance. Core graph/backlink/completion behaviour remains Obsidian-native; an ID link may still carry native unresolved styling even when Forester can follow it.
 
 ## Author–year citations
 

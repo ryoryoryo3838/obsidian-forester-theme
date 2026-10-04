@@ -68,7 +68,7 @@ export default class ForesterPlugin extends Plugin {
 		await this.loadSettings();
 		this.applySettingsToDom();
     this.hybridController = new HybridController(this, () => this.settings.hybrid);
-    await this.hybridController.initialize();
+    const hybridReady = this.hybridController.initialize();
 
 		// Reading view: headings, the root title, and depth indentation.
 		this.registerMarkdownPostProcessor((el, ctx) => this.processReadingSection(el, ctx));
@@ -169,6 +169,9 @@ export default class ForesterPlugin extends Plugin {
 
 		this.addSettingTab(new ForesterSettingTab(this.app, this));
 		this.app.workspace.onLayoutReady(rescan);
+
+    // Register ordinary/legacy paths immediately; cooperative vault bootstrap must not gate their startup.
+    await hybridReady;
 	}
 
 	onunload(): void {

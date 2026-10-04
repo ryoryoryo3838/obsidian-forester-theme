@@ -4,6 +4,7 @@ import { parseDocument as browserParseDocument } from '../node_modules/yaml/brow
 import type { parseDocument as YamlParseDocument } from 'yaml';
 const parseDocument = browserParseDocument as typeof YamlParseDocument;
 import type { HybridDiagnostic, HybridDocument, HybridIndex, HybridOptions, HybridRaw, HybridResolution, HybridSavePlan, HybridTree, SourceRange } from './hybrid-types';
+import { encodeWikilinkLabel } from './hybrid-literal-label';
 
 // Preserve option-only reservations without extending the shared document contract.
 const reservations = new WeakMap<HybridDocument, readonly string[]>();
@@ -27,16 +28,21 @@ function readYamlMapping(source: string, allowEmpty = false): Record<string, unk
 }
 
 function frontmatter(source: string, path: string, diagnostics: HybridDiagnostic[]): { value: Record<string, unknown>; range?: SourceRange } {
-  const lines = source.split('\n');
-  if (lines[0].replace(/\r$/, '') !== '---') return { value: {} };
-  let closing = 1;
-  while (closing < lines.length && !/^(---|\.\.\.)\r?$/.test(lines[closing])) closing++;
-  const to = closing < lines.length ? lines.slice(0, closing + 1).reduce((sum, line) => sum + line.length + 1, 0) : source.length;
-  const range = { from: 0, to: Math.min(to, source.length) };
+  // Check only the prefix before looking for a closing line. Ordinary bodies
+  // must not be split/normalized just to ask whether the dialect is active.
+  const opening = source.startsWith('---\n') ? 4 : source.startsWith('---\r\n') ? 5 :
+    source === '---' || source === '---\r' ? source.length : 0;
+  if (!opening) return { value: {} };
+  // LF anchors preserve the existing frontmatter grammar, including CRLF;
+  // multiline ^/$ would incorrectly accept a delimiter beside a bare CR.
+  const closing = /\n(?:---|\.\.\.)\r?(?:\n|$)/g;
+  closing.lastIndex = opening - 1;
+  const match = closing.exec(source);
+  const range = { from: 0, to: match ? match.index + match[0].length : source.length };
   const fail = (message: string) => diagnostics.push({ code: 'invalid-frontmatter', message, path, line: 0, severity: 'error' });
-  if (closing === lines.length) { fail('Unclosed YAML frontmatter'); return { value: {}, range }; }
+  if (!match) { fail('Unclosed YAML frontmatter'); return { value: {}, range }; }
   try {
-    const value = readYamlMapping(lines.slice(1, closing).map(line => line.replace(/\r$/, '')).join('\n'), true);
+    const value = readYamlMapping(source.slice(opening, match.index).replace(/\r(?=\n|$)/g, ''), true);
     return { value, range };
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
@@ -44,7 +50,34 @@ function frontmatter(source: string, path: string, diagnostics: HybridDiagnostic
   }
 }
 
+function modeEnabled(path: string, values: Record<string, unknown>, options: HybridOptions, diagnostics: HybridDiagnostic[], legacy: boolean): boolean {
+  if (!has(values, 'forester-mode')) return inFolders(path, options.folders);
+  const mode = values['forester-mode'];
+  if (mode === false) return false;
+  if (mode === true || mode === 'hybrid-v1' || (legacy && mode === 'hybrid-v0')) return true;
+  diagnostics.push({ code: 'invalid-mode', message: 'forester-mode must be hybrid-v1, hybrid-v0, true or false', path, line: 0, severity: 'error' });
+  return false;
+}
+
+/** Cheap adapter gate; hybrid-v0 remains a pure-parser compatibility dialect. */
+export function hybridModeEnabled(path: string, source: string, options: HybridOptions): boolean {
+  const diagnostics: HybridDiagnostic[] = [];
+  const fm = frontmatter(source, path, diagnostics);
+  return diagnostics.length === 0 && modeEnabled(path, fm.value, options, diagnostics, false);
+}
+
 interface SourceLine { text: string; from: number; end: number; line: number; }
+function sourceLineCount(source: string): number {
+  let count = 0, from = 0;
+  while (from < source.length) {
+    count++;
+    const newline = source.indexOf('\n', from);
+    if (newline < 0) break;
+    from = newline + 1;
+  }
+  return count;
+}
+
 function sourceLines(source: string): SourceLine[] {
   const lines: SourceLine[] = [];
   let from = 0;
@@ -105,26 +138,55 @@ function scanRaw(source: string, from: number): HybridRaw {
 }
 
 /** Inline guards stop at real paragraphs/blocks, including every thematic-break marker. */
-function inlineParagraphEnd(source: string, from: number): number {
+function inlineParagraphEnd(source: string, from: number, to = source.length): number {
   // CommonMark thematic breaks: <=3 leading spaces, >=3 identical *, _ or -,
   // with arbitrary spaces/tabs between/after markers, and no other characters.
-  // Bare CR is also a CommonMark line ending. This 1:1 view preserves offsets
-  // and keeps CRLF intact, so a single CRLF cannot be mistaken for a blank line.
-  const tail = source.slice(from).replace(/\r(?!\n)/g, '\n');
-  const boundary = /\r?\n[ \t]*\r?\n|\r?\n {0,3}(?:(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})(?=\r?\n|$)|`{3,}|~{3,}|#{1,6}(?:\s|$)|>|<|(?:[-+*]|\d+[.)])[ \t]|[-=]{2,}(?:\s|$))/.exec(tail);
-  return boundary ? from + boundary.index : source.length;
+  // Bare CR is also a line ending, but CRLF is indivisible: the negative
+  // lookahead prevents one CRLF from backtracking into two blank-line endings.
+  // Search the original string at an offset, not a normalized remaining suffix.
+  const bounded = to < source.length;
+  const text = bounded ? source.slice(from, to) : source;
+  const offset = bounded ? from : 0;
+  const matcher = /(?:\r\n|\r(?!\n)|\n)[ \t]*(?:\r\n|\r(?!\n)|\n)|(?:\r\n|\r(?!\n)|\n) {0,3}(?:(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})(?=\r\n|\r(?!\n)|\n|$)|`{3,}|~{3,}|#{1,6}(?:\s|$)|>|<|(?:[-+*]|\d+[.)])[ \t]|[-=]{2,}(?:\s|$))/g;
+  matcher.lastIndex = from - offset;
+  const boundary = matcher.exec(text);
+  return boundary ? offset + boundary.index : to;
+}
+
+function backtickRunEnd(source: string, from: number): number {
+  let end = from;
+  while (source[end] === '`') end++;
+  return end;
 }
 
 /** Inline code may cross soft line breaks, but never a paragraph or block boundary. */
 export function inlineCodeEnd(source: string, from: number): number {
-  const opening = /^`+/.exec(source.slice(from));
-  if (!opening) return -1;
-  let search = from + opening[0].length;
-  const limit = inlineParagraphEnd(source, search);
+  return codeSpanEnd(source, from);
+}
+
+interface InlineScanContext {
+  paragraphEnd(from: number): number;
+  nextCodeEnd(from: number, openingEnd: number): number;
+}
+
+function codeSpanEnd(source: string, from: number, context?: InlineScanContext): number {
+  if (source[from] !== '`') return -1;
+  const openingEnd = backtickRunEnd(source, from);
+  let search = openingEnd;
+  const length = openingEnd - from;
+  const limit = context ? context.paragraphEnd(search) : source.length;
+  if (context) {
+    const end = context.nextCodeEnd(from, openingEnd);
+    return end >= 0 && end - length < limit ? end : -1;
+  }
   while ((search = source.indexOf('`', search)) >= 0 && search < limit) {
-    const run = /^`+/.exec(source.slice(search))![0];
-    if (run.length === opening[0].length) return search + run.length;
-    search += run.length;
+    const end = backtickRunEnd(source, search);
+    if (end - search === length) {
+      // Standalone/public callers only need to inspect the candidate span.
+      // Include its closing backticks so an artificial EOF cannot create a block.
+      return search < inlineParagraphEnd(source, openingEnd, end) ? end : -1;
+    }
+    search = end;
   }
   return -1;
 }
@@ -133,10 +195,63 @@ export function inlineCodeEnd(source: string, from: number): number {
 function scanProtected(source: string, lines: SourceLine[], front?: SourceRange, raw?: HybridRaw[], diagnostics?: HybridDiagnostic[], path = ''): SourceRange[] {
   const ranges: SourceRange[] = front ? [front] : [];
   const lineByOffset = new Map(lines.map(line => [line.from, line]));
+  // Closing-delimiter lookups may jump ahead of the main cursor. A local
+  // parity table makes both forward and out-of-order escape checks constant
+  // time, including long runs of backslashes; it dies with this scan.
+  const escapeFlags = new Uint8Array(source.length);
+  let parity = 0;
+  for (let i = 0; i < source.length; i++) {
+    escapeFlags[i] = parity;
+    parity = source[i] === '\\' ? parity ^ 1 : 0;
+  }
+  const escapedAt = (offset: number): boolean => escapeFlags[offset] === 1;
+  // The scanner advances monotonically. Reuse the next block boundary until
+  // it is passed; no global source cache (or retained private body) is needed.
+  let boundaryFrom = -1, boundaryEnd = -1;
+  const paragraphEnd = (from: number): number => {
+    if (from < boundaryFrom || from > boundaryEnd) {
+      boundaryFrom = from;
+      boundaryEnd = inlineParagraphEnd(source, from);
+    }
+    return boundaryEnd;
+  };
+  // Index each backtick run once, grouped by length. Per-length cursors only
+  // move forward, including a suffix opener inside an escaped opening run.
+  let codeRuns: Map<number, number[]> | undefined;
+  const codePositions = new Map<number, number>();
+  const nextCodeEnd = (from: number, openingEnd: number): number => {
+    if (!codeRuns) {
+      codeRuns = new Map();
+      let start = source.indexOf('`');
+      while (start >= 0) {
+        const end = backtickRunEnd(source, start);
+        const length = end - start;
+        const runs = codeRuns.get(length) ?? [];
+        runs.push(end);
+        codeRuns.set(length, runs);
+        start = source.indexOf('`', end);
+      }
+    }
+    const length = openingEnd - from;
+    const runs = codeRuns.get(length);
+    if (!runs) return -1;
+    let position = codePositions.get(length) ?? 0;
+    while (position < runs.length && runs[position] <= openingEnd) position++;
+    codePositions.set(length, position);
+    return runs[position] ?? -1;
+  };
+  const inlineContext: InlineScanContext = { paragraphEnd, nextCodeEnd };
   const protect = (from: number, to: number) => { ranges.push({ from, to }); return to; };
+  // Cache the next unescaped closer (including a missing one). Starts advance
+  // monotonically for each of the four math tokens even after a boundary
+  // rejects a candidate, so a missing closer is never searched through again.
+  const delimiterCache = new Map<string, { from: number; close: number }>();
   const delimiterEnd = (token: string, start: number): number => {
+    const cached = delimiterCache.get(token);
+    if (cached && start >= cached.from && (cached.close < 0 || start <= cached.close)) return cached.close;
     let close = source.indexOf(token, start);
-    while (close >= 0 && escaped(source, close)) close = source.indexOf(token, close + token.length);
+    while (close >= 0 && escapedAt(close)) close = source.indexOf(token, close + token.length);
+    delimiterCache.set(token, { from: start, close });
     return close;
   };
   let cursor = front?.to ?? 0;
@@ -165,32 +280,32 @@ function scanProtected(source: string, lines: SourceLine[], front?: SourceRange,
       }
       if (/^(?: {4}|\t)/.test(line.text)) { cursor = protect(cursor, line.end); continue; }
     }
-    if (!escaped(source, cursor) && (source.startsWith('%%', cursor) || source.startsWith('<!--', cursor))) {
+    if (!escapedAt(cursor) && (source.startsWith('%%', cursor) || source.startsWith('<!--', cursor))) {
       const html = source.startsWith('<!--', cursor);
       const opening = html ? 4 : 2, token = html ? '-->' : '%%';
       const close = source.indexOf(token, cursor + opening);
       cursor = protect(cursor, close < 0 ? source.length : close + token.length);
       continue;
     }
-    if (source[cursor] === '`' && !escaped(source, cursor)) {
-      const run = /^`+/.exec(source.slice(cursor))![0];
-      const end = inlineCodeEnd(source, cursor);
+    if (source[cursor] === '`' && !escapedAt(cursor)) {
+      const runEnd = backtickRunEnd(source, cursor);
+      const end = codeSpanEnd(source, cursor, inlineContext);
       if (end >= 0) { cursor = protect(cursor, end); continue; }
-      cursor += run.length; continue;
+      cursor = runEnd; continue;
     }
-    const math = !escaped(source, cursor) && (source.startsWith('$$', cursor) ? '$$' : source.startsWith('\\[', cursor) ? '\\[' : source.startsWith('\\(', cursor) ? '\\(' : source[cursor] === '$' ? '$' : undefined);
+    const math = !escapedAt(cursor) && (source.startsWith('$$', cursor) ? '$$' : source.startsWith('\\[', cursor) ? '\\[' : source.startsWith('\\(', cursor) ? '\\(' : source[cursor] === '$' ? '$' : undefined);
     if (math) {
       const token = math === '\\[' ? '\\]' : math === '\\(' ? '\\)' : math;
       let close = delimiterEnd(token, cursor + math.length);
       const inline = math === '$' || math === '\\(';
       if (inline) {
         // Code and inline math share the same paragraph/block boundary semantics.
-        if (close >= inlineParagraphEnd(source, cursor + math.length)) close = -1;
+        if (close >= paragraphEnd(cursor + math.length)) close = -1;
       }
       if (close < 0 && !inline) diagnostics?.push({code:'unclosed-math',message:'Unclosed block math region',path,line:line?.line,severity:'error'});
       if (close >= 0 || !inline) { cursor = protect(cursor, close < 0 ? source.length : close + token.length); continue; }
     }
-    if (raw && source.startsWith('\\{', cursor) && !escaped(source, cursor)) {
+    if (raw && source.startsWith('\\{', cursor) && !escapedAt(cursor)) {
       const region = scanRaw(source, cursor);
       raw.push(region);
       cursor = protect(cursor, region.to);
@@ -202,13 +317,13 @@ function scanProtected(source: string, lines: SourceLine[], front?: SourceRange,
 }
 
 function applyMetadata(tree: HybridTree, values: Record<string, unknown>, diagnostics: HybridDiagnostic[]): void {
-  const list = (key: string, numbers = false): string[] => {
+  const list = (key: string, numbers = false): string[] | undefined => {
     if (!has(values, key)) return [];
     const value = values[key];
     const entries = Array.isArray(value) ? value : [value];
     if (entries.every(entry => typeof entry === 'string' || (numbers && typeof entry === 'number' && Number.isFinite(entry)))) return entries.map(String);
     diagnostics.push({ code: 'invalid-metadata', message: `${key} must be a string or list of strings`, path: tree.path, line: tree.line, severity: 'error' });
-    return [];
+    return undefined;
   };
   for (const key of ['publish', 'public-title'] as const) {
     if (!has(values, key)) continue;
@@ -219,10 +334,22 @@ function applyMetadata(tree: HybridTree, values: Record<string, unknown>, diagno
       diagnostics.push({ code: 'invalid-metadata', message: `${key} must be a boolean, not a string or another YAML type`, path: tree.path, line: tree.line, severity: 'error' });
     }
   }
-  tree.meta.authors = [...tree.meta.authors, ...list('authors')];
-  tree.meta.dates = [...tree.meta.dates, ...list('dates', true)];
+  tree.meta.authors = [...tree.meta.authors, ...(list('authors') ?? [])];
+  tree.meta.dates = [...tree.meta.dates, ...(list('dates', true) ?? [])];
+  if (has(values, 'contributors')) {
+    const contributors = list('contributors');
+    if (contributors) tree.meta.contributors = [...(tree.meta.contributors ?? []), ...contributors];
+  }
+  for (const key of ['position', 'institution', 'venue', 'source', 'doi', 'orcid', 'external', 'slides', 'video', 'bibtex', 'author']) {
+    if (!has(values, key)) continue;
+    // Native `author: false` controls display, not author attribution or inheritance.
+    const entries = key === 'author' && typeof values[key] === 'boolean' ? [String(values[key])] : list(key);
+    if (!entries) continue;
+    const properties = tree.meta.properties ?? (tree.meta.properties = {});
+    properties[key] = [...(properties[key] ?? []), ...entries];
+  }
   if (has(values, 'citation-authors')) {
-    tree.meta.citationAuthors = list('citation-authors');
+    tree.meta.citationAuthors = list('citation-authors') ?? [];
     tree.meta.citationAuthorsDeclared = true;
   }
   for (const key of ['title', 'taxon'] as const) {
@@ -324,23 +451,14 @@ function consumeMetadata(tree: HybridTree, source: string, diagnostics: HybridDi
 export function parseHybrid(path: string, source: string, options: HybridOptions): HybridDocument {
   const diagnostics: HybridDiagnostic[] = [];
   const fm = frontmatter(source, path, diagnostics);
-  let enabled = inFolders(path, options.folders);
-  if (has(fm.value, 'forester-mode')) {
-    const mode = fm.value['forester-mode'];
-    if (mode === false) enabled = false;
-    else if (mode === true || mode === 'hybrid-v1' || mode === 'hybrid-v0') enabled = true;
-    else {
-      enabled = false;
-      diagnostics.push({ code: 'invalid-mode', message: 'forester-mode must be hybrid-v1, hybrid-v0, true or false', path, line: 0, severity: 'error' });
-    }
-  }
-  const lines = sourceLines(source);
+  const enabled = diagnostics.length === 0 && modeEnabled(path, fm.value, options, diagnostics, true);
+  const lines = enabled ? sourceLines(source) : [];
   const raw: HybridRaw[] = [];
-  const protectedRanges = scanProtected(source, lines, fm.range, enabled ? raw : undefined, enabled ? diagnostics : undefined, path);
+  const protectedRanges = enabled ? scanProtected(source, lines, fm.range, raw, diagnostics, path) : fm.range ? [fm.range] : [];
   for (const region of raw) if (region.error) diagnostics.push({ code: 'unclosed-raw', message: region.error, path, line: lines.find(line => line.from <= region.from && region.from < line.end)?.line, severity: 'error' });
   const root: HybridTree = {
     key: `${path}:root`, path, level: 1, line: 0, headingTitle: null,
-    endLine: lines.length, from: 0, to: source.length, contentFrom: 0,
+    endLine: enabled ? lines.length : sourceLineCount(source), from: 0, to: source.length, contentFrom: 0,
     meta: { title: path.split('/').pop()!.replace(/\.md$/i, ''), titleSource: 'filename', authors: [], dates: [], citationAuthors: [], publish: false, publicTitle: false },
     metadataRanges: [], children: [], number: '',
   };
@@ -557,9 +675,9 @@ function rootIdChange(source: string, id: string): TextChange {
 /** Pure snapshots only: the caller owns compare-and-swap, writes and target autosave. */
 export function planHybridSave(index: HybridIndex, fromPath: string, draw?: () => string): HybridSavePlan {
   const document = index.documents.get(fromPath);
-  if (!document?.enabled) return { edits: [], diagnostics: [] };
+  if (!document) return { edits: [], diagnostics: [] };
   const diagnostics = index.diagnostics.filter(d => d.path === fromPath && d.severity === 'error');
-  if (diagnostics.length) return { edits: [], diagnostics };
+  if (diagnostics.length || !document.enabled) return { edits: [], diagnostics };
   const changes = new Map<string, TextChange[]>();
   const lineCache = new Map<HybridDocument, SourceLine[]>();
   const linesOf = (doc: HybridDocument): SourceLine[] => {
@@ -607,22 +725,24 @@ export function planHybridSave(index: HybridIndex, fromPath: string, draw?: () =
     change(doc, { from, to: from, text: ` ^${id}` });
     return id;
   };
-  const references: { target: string; hash: number; from: number; tree: HybridTree; document: HybridDocument }[] = [];
+  const references: { target: string; hash: number; from: number; labelAt?: number; tree: HybridTree; document: HybridDocument }[] = [];
   const links = /!?\[\[([^\]\r\n]+)\]\]/g;
   let match: RegExpExecArray | null;
   while ((match = links.exec(document.source))) {
     if (overlaps(document.protectedRanges, match.index, links.lastIndex) || escaped(document.source, match.index)) continue;
     const target = match[1].split('|')[0];
     const hash = target.indexOf('#');
-    if (hash < 0 || target[hash + 1] === '^') continue;
+    const fixesHeading = hash >= 0 && target[hash + 1] !== '^';
+    const needsLabel = !match[0].startsWith('!') && !match[1].includes('|');
+    if (!fixesHeading && !needsLabel) continue;
     const resolved = resolveHybrid(index, target, fromPath);
     if (resolved.status !== 'resolved') {
-      diagnostics.push({ code: resolved.status === 'ambiguous' ? 'ambiguous-reference' : 'missing-reference', message: resolved.message, path: fromPath, line: linesOf(document).find(line => line.from <= match!.index && match!.index < line.end)?.line, severity: 'warning' });
+      if (fixesHeading || resolved.status === 'ambiguous') diagnostics.push({ code: resolved.status === 'ambiguous' ? 'ambiguous-reference' : 'missing-reference', message: resolved.message, path: fromPath, line: linesOf(document).find(line => line.from <= match!.index && match!.index < line.end)?.line, severity: 'warning' });
       continue;
     }
     if (!resolved.document.enabled) continue;
     const from = match.index + (match[0].startsWith('!') ? 3 : 2);
-    references.push({ target, hash, from, tree: resolved.tree, document: resolved.document });
+    references.push({ target, hash: fixesHeading ? hash : -1, from, labelAt: needsLabel ? from + target.length : undefined, tree: resolved.tree, document: resolved.document });
   }
   const touched = new Set(references.map(reference => reference.document.path));
   for (const diagnostic of index.diagnostics) if (touched.has(diagnostic.path) && diagnostic.path !== fromPath && diagnostic.severity === 'error') diagnostics.push(diagnostic);
@@ -635,8 +755,15 @@ export function planHybridSave(index: HybridIndex, fromPath: string, draw?: () =
       if (tree !== document.root && tree.meta.publish && !parent?.meta.publish) ensureTree(tree, document);
     }
     for (const reference of references) {
-      const id = ensureTree(reference.tree, reference.document);
-      change(document, { from: reference.from, to: reference.from + reference.target.length, text: `${reference.target.slice(0, reference.hash)}#^${id}` });
+      if (reference.hash >= 0) {
+        const id = ensureTree(reference.tree, reference.document);
+        change(document, { from: reference.from, to: reference.from + reference.target.length, text: `${reference.target.slice(0, reference.hash)}#^${id}` });
+      }
+      if (reference.labelAt !== undefined && reference.tree.meta.title.trim()) {
+        // Generated titles are literal text, not new code/math/comments/raw regions.
+        const label = encodeWikilinkLabel(reference.tree.meta.title.trim().replace(/[\r\n]+/g, ' '));
+        change(document, { from: reference.labelAt, to: reference.labelAt, text: `|${label}` });
+      }
     }
   } catch (error) {
     diagnostics.push({ code: 'id-allocation-failed', message: error instanceof Error ? error.message : String(error), path: fromPath, severity: 'error' });

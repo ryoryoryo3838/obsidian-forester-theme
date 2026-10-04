@@ -5,6 +5,10 @@ export interface HybridDiagnostic { code: string; message: string; path: string;
 export interface SourceRange { from: number; to: number; }
 export interface HybridMeta {
   title: string; taxon?: string; authors: string[]; dates: string[];
+  /** Native contributor attributions are local to the declaring tree. */
+  contributors?: string[];
+  /** Recognized native metadata values are local, separate from publication citations. */
+  properties?: Record<string, string[]>;
   /** Filename fallback is local-only; absent provenance preserves legacy structured fixtures. */
   titleSource?: 'filename' | 'heading' | 'metadata';
   citationAuthors: string[]; publicationYear?: string;

@@ -1,14 +1,19 @@
 import { Component, editorInfoField, editorLivePreviewField, MarkdownRenderChild, MarkdownRenderer, MarkdownView, Modal, Notice, Plugin, TFile, type Editor, type MarkdownPostProcessorContext } from 'obsidian';
 import { ViewPlugin, type EditorView } from '@codemirror/view';
 import type { EditorState } from '@codemirror/state';
-import { indexHybrid, parseHybrid, planHybridSave, resolveHybrid } from './hybrid-core';
+import { hybridModeEnabled, indexHybrid, parseHybrid, planHybridSave, resolveHybrid } from './hybrid-core';
 import { createHybridEditor, hybridRefresh } from './hybrid-editor';
 import { commitHybridPlan } from './hybrid-save';
 import { projectPublic } from './hybrid-public';
 import { citationLabel, foresterTokens, planDisplay, type DisplaySpan, type EmbedFlags } from './hybrid-display';
+import { appendSlug, appendTaxon, renderMetadata, renderTreeHeader, type HeaderHost } from './hybrid-header';
 import type { HybridDiagnostic, HybridDocument, HybridIndex, HybridOptions, HybridTree } from './hybrid-types';
 
 interface TextPatch { from: number; to: number; text: string; }
+interface ViewRevision { path: string; revision: number; enabled: boolean; }
+
+// A timer task lets paint/input run; awaiting already-resolved IO only drains microtasks.
+const scheduleTask = globalThis.setTimeout.bind(globalThis);
 
 /** Save plans only add ID lines or change individual reference/heading lines. Keep unchanged lines intact. */
 function textPatches(before: string, after: string): TextPatch[] {
@@ -43,10 +48,16 @@ function textPatches(before: string, after: string): TextPatch[] {
 /** Opt-in adapter. It does not replace the legacy save command or native link lookup. */
 export class HybridController {
   private sources = new Map<string, string>();
+  private sourceVersions = new Map<string, number>();
+  private sourceGeneration = 0;
   private index: HybridIndex = indexHybrid([]);
   private fieldIndex: HybridIndex = this.index;
   private overlays = new Map<string, HybridIndex>();
-  private refreshTail: Promise<void> = Promise.resolve();
+  private overlayDocuments = new Map<string, HybridDocument>();
+  private parsed = new Map<string, { document: HybridDocument; optionsKey: string }>();
+  private indexOptionsKey = '';
+  private refreshTask?: Promise<void>;
+  private refreshRequested = false;
   private stopped = false;
   private warned = new Set<string>();
   private revision = 0;
@@ -56,56 +67,86 @@ export class HybridController {
   private inFlight = false;
   private observedEditors = new Map<Editor, TFile>();
   private nativeViews = new Set<EditorView>();
+  private editorRevisions = new WeakMap<EditorView, ViewRevision>();
+  private previewRevisions = new WeakMap<MarkdownView, ViewRevision>();
   private updatingEditors = new Set<Editor>();
   private viewCleanups = new Set<() => void>();
   private readingChildren = new Set<MarkdownRenderChild>();
+  private readingHeaders = new WeakMap<HTMLElement, { child: MarkdownRenderChild; headings: HTMLElement[]; nodes: Element[]; signature: string }>();
   private readingEmbeds = new Map<HTMLElement, { section: HTMLElement; child: MarkdownRenderChild; wrapper: HTMLElement; path: string; source: string; from: number; signature: string }>();
   private readingLinks = new WeakMap<HTMLElement, { child: MarkdownRenderChild; anchors: HTMLElement[]; signature: string }>();
 
   constructor(private plugin: Plugin, private options: () => HybridOptions) {}
 
-  private parse(path: string, source: string): HybridDocument {
-    const document = parseHybrid(path, source, this.options());
+  private configuration(): { options: HybridOptions; key: string } {
+    const value = this.options();
+    const options = { folders: [...value.folders], publicFolders: [...value.publicFolders], reservedIds: [...value.reservedIds] };
+    return { options, key: JSON.stringify(options) };
+  }
+
+  private cachedDocument(path: string, source: string, key: string): HybridDocument | undefined {
+    const indexed = this.index.documents.get(path);
+    if (this.indexOptionsKey === key && indexed?.source === source) return indexed;
+    const cached = this.parsed.get(path);
+    return cached?.optionsKey === key && cached.document.source === source ? cached.document : undefined;
+  }
+
+  private parse(path: string, source: string, config = this.configuration()): HybridDocument {
+    const cached = this.cachedDocument(path, source, config.key);
+    if (cached) return cached;
+    let document = parseHybrid(path, source, config.options);
     // hybrid-v0 is a core compatibility dialect, not an adapter opt-in.
     if (Object.prototype.hasOwnProperty.call(document.frontmatter, 'forester-mode') &&
         ![true, false, 'hybrid-v1'].includes(document.frontmatter['forester-mode'] as boolean | string)) {
-      return { ...document, enabled: false };
+      document = { ...document, enabled: false };
     }
+    this.parsed.set(path, { document, optionsKey: config.key });
     return document;
   }
 
   isEnabled(path: string, source?: string): boolean {
     const text = source ?? this.sources.get(path);
-    return text !== undefined && this.parse(path, text).enabled;
+    return text !== undefined && hybridModeEnabled(path, text, this.options());
+  }
+
+  private recordSource(path: string, source?: string): boolean {
+    if (source !== undefined && this.sources.get(path) === source) return false;
+    if (source === undefined) this.sources.delete(path); else this.sources.set(path, source);
+    this.sourceVersions.set(path, ++this.sourceGeneration);
+    return true;
   }
 
   async initialize(): Promise<void> {
     const { vault, workspace, metadataCache } = this.plugin.app;
     this.plugin.register(() => {
       this.stopped = true;
+      this.refreshRequested = false;
       for (const timer of this.settled.values()) clearTimeout(timer);
       for (const cleanup of this.viewCleanups) cleanup();
       for (const child of [...this.readingChildren]) child.unload();
       this.viewCleanups.clear(); this.settled.clear(); this.observedEditors.clear(); this.nativeViews.clear();
+      this.sources.clear(); this.sourceVersions.clear(); this.parsed.clear(); this.overlays.clear(); this.overlayDocuments.clear();
+      this.index = { documents: new Map(), ids: new Map(), diagnostics: [] }; this.fieldIndex = this.index;
     });
     const changed = (file: TFile, source?: string): Promise<void> => {
-      if (source !== undefined) this.sources.set(file.path, source);
-      else this.sources.delete(file.path);
+      if (this.stopped) return Promise.resolve();
+      if (!this.recordSource(file.path, source)) return this.inFlight ? Promise.resolve() : this.refreshTask ?? Promise.resolve();
       return this.inFlight ? Promise.resolve() : this.refresh();
     };
     this.plugin.registerEvent(vault.on('modify', file => file instanceof TFile ? changed(file) : this.refresh()));
     this.plugin.registerEvent(vault.on('create', file => file instanceof TFile ? changed(file) : this.refresh()));
     this.plugin.registerEvent(vault.on('rename', (file, oldPath) => {
-      this.sources.delete(oldPath);
+      if (this.stopped) return Promise.resolve();
+      this.recordSource(oldPath);
       return file instanceof TFile ? changed(file) : this.refresh();
     }));
-    this.plugin.registerEvent(vault.on('delete', file => { this.sources.delete(file.path); return this.refresh(); }));
+    this.plugin.registerEvent(vault.on('delete', file => { if (this.stopped) return Promise.resolve(); this.recordSource(file.path); return this.refresh(); }));
     this.plugin.registerEvent(metadataCache.on('changed', (file, source) => changed(file, source)));
     this.plugin.registerEvent(workspace.on('editor-change', (editor, info) => {
       const timer = this.settled.get(editor); if (timer !== undefined) clearTimeout(timer);
       this.settled.delete(editor);
       if (this.stopped || this.updatingEditors.has(editor) || !info.file || info.file.extension !== 'md') return;
-      const path = info.file.path; this.sources.set(path, editor.getValue());
+      const path = info.file.path; this.recordSource(path, editor.getValue());
       if (this.isEnabled(path, editor.getValue())) {
         // Obsidian continuously autosaves. A settled author, not a second Ctrl+S wrapper, is the trigger.
         this.settled.set(editor, setTimeout(() => {
@@ -117,13 +158,18 @@ export class HybridController {
     }));
     this.plugin.registerEditorExtension([createHybridEditor({
       document: state => {
+        if (this.stopped) return null;
         this.rememberState(state);
         const info = state.field(editorInfoField, false);
         if (!state.field(editorLivePreviewField, false) || !info?.file || info.file.extension !== 'md') return null;
-        const document = this.parse(info.file.path, state.doc.toString());
-        this.fieldIndex = indexHybrid([...this.index.documents.values()].filter(doc => doc.path !== document.path).concat(document));
-        this.overlays.set(document.path, this.fieldIndex);
-        return document.enabled ? document : null;
+        const path = info.file.path, source = state.doc.toString();
+        if (this.stopped || !this.isEnabled(path, source)) {
+          this.overlays.delete(path); this.overlayDocuments.delete(path); this.fieldIndex = this.index;
+          return null;
+        }
+        const document = this.parse(path, source);
+        this.fieldIndex = this.overlay(document);
+        return document;
       },
       // document/build/resolve run synchronously. The source path may change during a recursive outline,
       // but every lookup in this build must retain the same current-document overlay.
@@ -161,48 +207,127 @@ export class HybridController {
   }
 
   refresh(): Promise<void> {
-    const run = async (): Promise<void> => {
-      if (this.stopped) return;
-      const vault = this.plugin.app.vault;
-      const files = vault.getMarkdownFiles();
-      for (const file of files) {
-        if (!this.sources.has(file.path)) {
-          const source = await vault.read(file);
-          if (!this.sources.has(file.path)) this.sources.set(file.path, source);
+    if (this.stopped) return Promise.resolve();
+    this.refreshRequested = true;
+    if (this.refreshTask) return this.refreshTask;
+    this.refreshTask = Promise.resolve().then(async () => {
+      try {
+        while (this.refreshRequested && !this.stopped) {
+          this.refreshRequested = false;
+          await this.rebuild();
         }
+      } finally {
+        this.refreshTask = undefined;
+        this.refreshRequested = false;
       }
-      const paths = new Set(vault.getMarkdownFiles().map(file => file.path));
-      this.sources = new Map([...this.sources].filter(([path]) => paths.has(path)));
-      this.index = indexHybrid([...this.sources].map(([path, source]) => this.parse(path, source)));
+    });
+    return this.refreshTask;
+  }
+
+  private async rebuild(): Promise<void> {
+    if (this.stopped) return;
+    const config = this.configuration();
+    const vault = this.plugin.app.vault;
+    let processed = 0, sliceStart = performance.now();
+    const due = (): boolean => ++processed >= 32 || performance.now() - sliceStart >= 8;
+    const yieldToUI = async (): Promise<void> => {
+      await new Promise<void>(resolve => scheduleTask(resolve, 0));
+      processed = 0; sliceStart = performance.now();
+    };
+    const files = vault.getMarkdownFiles();
+    for (const file of files) {
+      const path = file.path;
+      if (!this.sources.has(path)) {
+        const version = this.sourceVersions.get(path);
+        let source: string;
+        try { source = await vault.read(file); }
+        catch (error) {
+          if (this.stopped) return;
+          if (this.sourceVersions.get(path) === version && file.path === path && vault.getMarkdownFiles().includes(file)) throw error;
+          // The notification retired this read (e.g. rename/delete); reconcile the new membership instead.
+          this.refreshRequested = true; continue;
+        }
+        if (this.stopped) return;
+        if (typeof source !== 'string') throw new Error(`Invalid Markdown source: ${path}`);
+        if (this.sourceVersions.get(path) === version && file.path === path && !this.sources.has(path)) {
+          if (vault.getAbstractFileByPath(path) === file) this.recordSource(path, source);
+          else if (vault.getMarkdownFiles().includes(file)) throw new Error(`Unstable file snapshot: ${path}`);
+        }
+        if (due()) await yieldToUI();
+      } else if (performance.now() - sliceStart >= 8) {
+        await yieldToUI();
+      }
+      if (this.stopped) return;
+    }
+    const paths = new Set(vault.getMarkdownFiles().map(file => file.path));
+    this.sources = new Map([...this.sources].filter(([path]) => paths.has(path)));
+    for (const path of this.parsed.keys()) if (!paths.has(path)) this.parsed.delete(path);
+    for (const path of this.sourceVersions.keys()) if (!paths.has(path)) this.sourceVersions.delete(path);
+    if ([...paths].some(path => !this.sources.has(path))) { this.refreshRequested = true; return; }
+    if (this.configuration().key !== config.key) { this.refreshRequested = true; return; }
+    const snapshot = new Map(this.sources), generation = this.sourceGeneration;
+    const documents: HybridDocument[] = [];
+    for (const [path, source] of snapshot) {
+      const cached = this.cachedDocument(path, source, config.key);
+      if ((!cached && (source.length >= 65536 || due())) || performance.now() - sliceStart >= 8) await yieldToUI();
+      if (this.stopped) return;
+      documents.push(cached ?? this.parse(path, source, config));
+    }
+    const latestPaths = new Set(vault.getMarkdownFiles().map(file => file.path));
+    if (this.sourceGeneration !== generation || this.configuration().key !== config.key || latestPaths.size !== paths.size || [...latestPaths].some(path => !paths.has(path))) {
+      // IO and cooperative yields can admit newer source/config/membership events. Never publish the old slice.
+      this.refreshRequested = true; return;
+    }
+    const previous = this.index;
+    if (config.key !== this.indexOptionsKey || documents.length !== this.index.documents.size || documents.some(doc => this.index.documents.get(doc.path) !== doc)) {
+      this.index = indexHybrid(documents);
+      this.indexOptionsKey = config.key;
       this.fieldIndex = this.index;
       this.overlays.clear();
+      this.overlayDocuments.clear();
       this.revision++;
       this.warn(this.index.diagnostics.filter(d => ['duplicate-id', 'file-id-collision', 'alias-id-collision', 'invalid-id', 'invalid-metadata', 'invalid-frontmatter'].includes(d.code)));
-      const views = new Set<EditorView>(this.nativeViews);
-      for (const editor of this.observedEditors.keys()) {
-        const cm = (editor as Editor & { cm?: EditorView }).cm; if (cm) views.add(cm);
-      }
-      for (const leaf of this.plugin.app.workspace.getLeavesOfType('markdown')) {
-        if (!(leaf.view instanceof MarkdownView)) continue;
-        // Obsidian's CM6 bridge is not in the Editor declarations. Do not fall back to CM5 APIs.
-        const cm = (leaf.view.editor as Editor & { cm?: EditorView }).cm;
-        if (cm) views.add(cm);
-        if (leaf.view.getMode() === 'preview') leaf.view.previewMode.rerender(true);
-      }
-      for (const view of views) view.dispatch({ effects: hybridRefresh.of(null) });
+    }
+    this.refreshViews(previous);
+  }
+
+  private refreshViews(previous: HybridIndex): void {
+    const views = new Map<EditorView, { path: string; source?: string }>();
+    const collect = (cm: EditorView | undefined, file?: TFile, editor?: Editor): void => {
+      if (!cm) return;
+      const info = cm.state?.field(editorInfoField, false), path = info?.file?.path ?? file?.path;
+      if (path) views.set(cm, { path, source: cm.state?.doc.toString() ?? editor?.getValue() });
     };
-    const result = this.refreshTail.then(run, run);
-    this.refreshTail = result;
-    return result;
+    for (const cm of this.nativeViews) collect(cm);
+    for (const [editor, file] of this.observedEditors) collect((editor as Editor & { cm?: EditorView }).cm, file, editor);
+    for (const leaf of this.plugin.app.workspace.getLeavesOfType('markdown')) {
+      if (!(leaf.view instanceof MarkdownView)) continue;
+      const view = leaf.view, path = view.file?.path;
+      // Obsidian's CM6 bridge is not in the Editor declarations. Do not fall back to CM5 APIs.
+      collect((view.editor as Editor & { cm?: EditorView }).cm, view.file ?? undefined, view.editor);
+      if (!path || view.getMode() !== 'preview') continue;
+      const enabled = this.isEnabled(path, view.editor.getValue()), seen = this.previewRevisions.get(view);
+      const wasEnabled = seen?.path === path && seen.enabled || previous !== this.index && previous.documents.get(path)?.enabled;
+      if ((enabled || wasEnabled) && (seen?.path !== path || seen.revision !== this.revision || seen.enabled !== enabled)) view.previewMode.rerender(true);
+      this.previewRevisions.set(view, { path, revision: this.revision, enabled });
+    }
+    for (const [view, { path, source }] of views) {
+      const enabled = this.isEnabled(path, source), seen = this.editorRevisions.get(view);
+      const wasEnabled = seen?.path === path && seen.enabled || previous !== this.index && previous.documents.get(path)?.enabled;
+      if ((enabled || wasEnabled) && (seen?.path !== path || seen.revision !== this.revision || seen.enabled !== enabled)) view.dispatch({ effects: hybridRefresh.of(null) });
+      this.editorRevisions.set(view, { path, revision: this.revision, enabled });
+    }
   }
 
   private warn(diagnostics: HybridDiagnostic[]): void {
-    const current = new Set<string>();
+    const current = new Set<string>(), fresh: HybridDiagnostic[] = [];
     for (const d of diagnostics) {
       const key = `${d.code}:${d.path}:${d.line}:${d.message}`;
+      if (!current.has(key) && !this.warned.has(key)) fresh.push(d);
       current.add(key);
-      if (!this.warned.has(key)) new Notice(`Hybrid: ${d.path}${d.line === undefined ? '' : ':' + (d.line + 1)} [${d.code}] ${d.message}`, 8000);
     }
+    for (const d of fresh.slice(0, 3)) new Notice(`Hybrid: ${d.path}${d.line === undefined ? '' : ':' + (d.line + 1)} [${d.code}] ${d.message}`, 8000);
+    if (fresh.length > 3) new Notice(`Hybrid: ${fresh.length - 3} additional diagnostics (notifications limited).`, 8000);
     this.warned = current;
   }
 
@@ -218,6 +343,7 @@ export class HybridController {
   }
 
   private rememberState(state: EditorState): void {
+    if (this.stopped) return;
     const info = state.field(editorInfoField, false);
     if (info?.editor && info.file instanceof TFile) this.observedEditors.set(info.editor, info.file);
   }
@@ -278,7 +404,7 @@ export class HybridController {
               catch (error) { new Notice(`Hybrid editor ${target}: ${String(error)}`, 10000); throw error; }
               finally { this.updatingEditors.delete(e); }
             }
-            this.sources.set(target, after);
+            this.recordSource(target, after);
             return true;
           },
         }, path);
@@ -326,11 +452,20 @@ export class HybridController {
     const active = this.plugin.app.workspace.activeEditor;
     if (!active?.file || !active.editor) return this.index;
     const doc = this.parse(active.file.path, active.editor.getValue());
-    return indexHybrid([...this.index.documents.values()].filter(d => d.path !== doc.path).concat(doc));
+    return this.overlay(doc);
+  }
+
+  private overlay(document: HybridDocument): HybridIndex {
+    if (this.overlayDocuments.get(document.path) === document) return this.overlays.get(document.path)!;
+    const index = this.index.documents.get(document.path) === document ? this.index :
+      indexHybrid([...this.index.documents.values()].filter(doc => doc.path !== document.path).concat(document));
+    this.overlayDocuments.set(document.path, document); this.overlays.set(document.path, index);
+    return index;
   }
 
   private async checkTrees(): Promise<void> {
     await this.refresh();
+    if (this.stopped) return;
     const path = this.plugin.app.workspace.getActiveFile()?.path, index = this.currentIndex();
     const doc = path ? index.documents.get(path) : undefined;
     if (!doc?.enabled) { new Notice('Hybrid: 有効なノートを開いてください'); return; }
@@ -355,6 +490,7 @@ export class HybridController {
 
   private async previewPublic(): Promise<void> {
     await this.refresh();
+    if (this.stopped) return;
     const projection = projectPublic(this.currentIndex());
     // A local summary only: no private source/body/JSON, file, clipboard or network sink.
     this.showReport('Public projection preview · ローカルのみ', `${projection.trees.length} public trees / ${projection.diagnostics.length} diagnostics · 公開/書出しは行いません`, projection.diagnostics);
@@ -420,7 +556,7 @@ export class HybridController {
     const link = element?.closest?.('a.internal-link, .cm-hmd-internal-link');
     if (!link || link.hasAttribute('data-hybrid-link') || link.closest('pre, code, blockquote, .internal-embed, .hybrid-embed, .hybrid-citation, .markdown-rendered, .markdown-preview-view, .markdown-embed-content')) return;
     const doc = this.parse(info.file.path, view.state.doc.toString());
-    const index = indexHybrid([...this.index.documents.values()].filter(d => d.path !== doc.path).concat(doc));
+    const index = this.overlay(doc);
     const sourceLink = link.matches('.cm-hmd-internal-link');
     if (sourceLink && !event.ctrlKey && !event.metaKey) return; // Plain source clicks must still edit.
     const href = link.getAttribute('data-href') ?? link.getAttribute('href') ?? '';
@@ -502,19 +638,14 @@ export class HybridController {
     el.setAttribute('data-hybrid-render', String(this.revision));
     el.setAttribute('data-hybrid-source-path', tree.path);
     el.setAttribute('data-hybrid-from', String(tree.contentFrom)); el.setAttribute('data-hybrid-to', String(tree.to));
-    if (flags.heading) {
-      const header = el.ownerDocument.createElement('header'); header.className = 'hybrid-tree-header';
-      const heading = el.ownerDocument.createElement('h2');
-      heading.textContent = [tree.meta.taxon, tree.number, tree.meta.title].filter(Boolean).join(' ');
-      header.append(heading); el.append(header);
-    }
-    const body = el.ownerDocument.createElement('div'); body.className = 'hybrid-tree-body'; el.append(body);
     const component = parent.addChild(new Component()); component.load();
+    if (flags.heading) el.append(renderTreeHeader(el.ownerDocument, tree, [tree.meta.taxon, tree.number].filter(Boolean).join(' '), this.headerHost(component, index)));
+    const body = el.ownerDocument.createElement('div'); body.className = 'hybrid-tree-body'; el.append(body);
     let cancelled = false; component.register(() => { cancelled = true; });
     const section = this.sectionSource(doc, tree, index);
     void MarkdownRenderer.render(this.plugin.app, section.source, body, tree.path, component).then(() => {
       if (cancelled || this.stopped) return;
-      this.decorateHeadings(body, doc, tree.contentFrom, tree.to, index);
+      this.decorateHeadings(body, doc, tree.contentFrom, tree.to, index, component);
       this.applySlots(body, section.slots, doc, component, index, [...stack, tree.key], budget);
       this.bindIdLinks(body, doc, tree.contentFrom, tree.to, index, component);
     }).catch(error => {
@@ -529,33 +660,57 @@ export class HybridController {
     child.register(() => this.readingChildren.delete(child)); ctx.addChild(child); return child;
   }
 
-  private decorateHeadings(el: HTMLElement, doc: HybridDocument, from: number, to: number, index = this.index): void {
-    const headings = Array.from(el.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6')).filter(h => {
+  private headerHost(owner: Component, index = this.index): HeaderHost {
+    return { resolve: (target, path) => resolveHybrid(index, target, path), open: (target, path) => this.open(target, path, index), register: cleanup => owner.register(cleanup) };
+  }
+
+  private headerHeadings(el: HTMLElement): HTMLElement[] {
+    return Array.from(el.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6')).filter(h => {
       for (let parent = h.parentElement; parent && parent !== el; parent = parent.parentElement) if (parent.matches('pre, code, blockquote, .internal-embed, .hybrid-embed, .hybrid-tree-header')) return false;
       return true;
     });
-    const available = doc.trees.filter(t => t.level > 1 && t.from >= from && t.from < to);
+  }
+
+  private decorateHeadings(el: HTMLElement, doc: HybridDocument, from: number, to: number, index: HybridIndex, owner: Component): void {
+    const headings = this.headerHeadings(el);
+    const normalize = (text: string): string => text.replace(/^ {0,3}#{1,6}\s+/, '').replace(/\s+#+\s*$/, '').replace(/\s+\^[A-Za-z0-9-]+$/, '').replace(/(?:^|\s)#[A-Za-z][\w/-]*(?=\s|$)/g, '').replace(/[`*_]/g, '').trim();
+    const rootLine = doc.source.split('\n').findIndex((line, i, lines) => /^ {0,3}#\s+/.test(line) && !doc.protectedRanges.some(r => { const at = lines.slice(0, i).reduce((n, s) => n+s.length+1, 0); return r.from <= at && at < r.to; }));
+    const rootAt = rootLine < 0 ? -1 : doc.source.split('\n').slice(0, rootLine).reduce((n, s) => n+s.length+1, 0);
+    const available = doc.trees.filter(t => t.level === 1 ? rootAt >= from && rootAt < to : t.from >= from && t.from < to);
     const labels = new Map(planDisplay(doc, [], (target, sourcePath = doc.path) => resolveHybrid(index, target, sourcePath)).headings.map(h => [h.at, h.label]));
-    const normalize = (text: string): string => text.replace(/^ {0,3}#{1,6}\s+/, '').replace(/\s+#+\s*$/, '').replace(/\s+\^[A-Za-z0-9-]+$/, '').replace(/(?:^|\s)#(?:ref|reference|person)(?=\s|$)/gi, '').replace(/[`*_]/g, '').trim();
+    const host = this.headerHost(owner, index);
     for (const heading of headings) {
-      const existing = heading.querySelector('[data-hybrid-badge]');
-      const at = available.findIndex(tree => existing ? tree.key === existing.getAttribute('data-hybrid-badge') :
-        tree.level === Number(heading.tagName.slice(1)) && normalize(doc.source.slice(tree.from, doc.source.indexOf('\n', tree.from) < 0 ? doc.source.length : doc.source.indexOf('\n', tree.from))) === normalize(heading.textContent ?? ''));
+      const existing = heading.getAttribute('data-hybrid-heading');
+      const at = available.findIndex(tree => existing ? tree.key === existing : tree.level === Number(heading.tagName.slice(1)) && normalize(tree.headingTitle ?? tree.meta.title) === normalize(heading.textContent ?? ''));
       if (at < 0) continue;
-      const tree = available.splice(at, 1)[0]; if (existing) continue;
-      heading.setAttribute('data-hybrid-source-path', doc.path); heading.setAttribute('data-hybrid-from', String(tree.from)); heading.setAttribute('data-hybrid-to', String(tree.to));
-      const label = labels.get(tree.from) ?? [tree.meta.taxon, tree.number].filter(Boolean).join(' ');
-      if (label) { const badge = el.ownerDocument.createElement('span'); badge.className = 'hybrid-taxon-number'; badge.setAttribute('data-hybrid-badge', tree.key); badge.textContent = label + ' '; heading.prepend(badge); }
+      const tree = available.splice(at, 1)[0];
+      if (existing) {
+        if (!heading.querySelector('[data-hybrid-badge]')) appendTaxon(heading, tree, tree.level === 1 ? tree.meta.taxon ?? '' : labels.get(tree.from) ?? [tree.meta.taxon, tree.number].filter(Boolean).join(' '));
+        continue;
+      }
+      heading.setAttribute('data-hybrid-heading', tree.key);
+      heading.setAttribute('data-hybrid-source-path', doc.path); heading.setAttribute('data-hybrid-from', String(tree.level === 1 ? rootAt : tree.from)); heading.setAttribute('data-hybrid-to', String(tree.to));
+      // Remove only the native caret suffix, preserving rich Markdown title nodes.
+      const texts: Text[] = [];
+      const collect = (node: Node): void => { if (node.nodeType === 3) texts.push(node as Text); else for (const child of Array.from(node.childNodes)) collect(child); };
+      collect(heading);
+      const last = texts[texts.length-1], original = last?.data;
+      if (last && tree.id) last.data = last.data.replace(new RegExp('\\s+\\^' + tree.id + '\\s*$'), '');
+      const label = tree.level === 1 ? tree.meta.taxon ?? '' : labels.get(tree.from) ?? [tree.meta.taxon, tree.number].filter(Boolean).join(' ');
+      appendTaxon(heading, tree, label); appendSlug(heading, tree, host);
+      const slugSpace = heading.querySelector('.hybrid-slug')?.previousSibling;
+      const metadata = renderMetadata(el.ownerDocument, tree, host); if (metadata) heading.after(metadata);
+      owner.register(() => { heading.querySelector('[data-hybrid-badge]')?.remove(); heading.querySelector('.hybrid-slug')?.remove(); slugSpace?.parentNode?.removeChild(slugSpace); metadata?.remove(); heading.removeAttribute('data-hybrid-heading'); if (last && original !== undefined) last.data = original; });
     }
   }
 
   private processReading(el: HTMLElement, ctx: MarkdownPostProcessorContext): Promise<void> | void {
-    if (this.stopped || el.closest('pre, code, blockquote, .internal-embed, [data-hybrid-render]')) return;
+    const doc = this.index.documents.get(ctx.sourcePath);
+    if (this.stopped || !doc?.enabled || el.closest('pre, code, blockquote, .internal-embed, [data-hybrid-render]')) return;
     for (const [native, previous] of this.readingEmbeds) {
       if (previous.section === el && (!el.contains(native) || !native.contains(previous.wrapper))) previous.child.unload();
     }
-    const doc = this.index.documents.get(ctx.sourcePath);
-    if (!doc?.enabled) return;
+
     const info = ctx.getSectionInfo(el);
     if (!info || info.text !== doc.source || info.lineStart < 0 || info.lineEnd < info.lineStart) return;
     const lines = doc.source.split('\n');
@@ -563,15 +718,34 @@ export class HybridController {
     const to = Math.min(doc.source.length, lines.slice(0, info.lineEnd + 1).reduce((n, line) => n + line.length + 1, 0));
     // Replace this one source-matched section, not a guessed DOM substring, when raw spans could contain Markdown/HTML.
     if (doc.raw.some(r => r.from >= from && r.to <= to)) {
+      this.readingHeaders.get(el)?.child.unload();
       const child = this.readingChild(el, ctx);
       let cancelled = false; child.register(() => { cancelled = true; });
       el.setAttribute('data-hybrid-render', String(this.revision)); el.replaceChildren();
       const index = this.index, section = this.sectionSource(doc, { contentFrom: from, to }, index);
       return MarkdownRenderer.render(this.plugin.app, section.source, el, doc.path, child).then(() => {
-        if (!cancelled && !this.stopped) { this.decorateHeadings(el, doc, from, to, index); this.applySlots(el, section.slots, doc, child, index, [doc.root.key], { remaining: 256 }); this.bindIdLinks(el, doc, from, to, index, child); }
+        if (!cancelled && !this.stopped) { this.decorateHeadings(el, doc, from, to, index, child); this.applySlots(el, section.slots, doc, child, index, [doc.root.key], { remaining: 256 }); this.bindIdLinks(el, doc, from, to, index, child); }
       }).catch(error => { if (!cancelled) { el.classList.add('hybrid-error'); el.textContent = `Hybrid: ${String(error)}`; new Notice(el.textContent, 8000); } });
     }
-    this.decorateHeadings(el, doc, from, to);
+    const headings = this.headerHeadings(el), headerSignature = `${this.revision}:${doc.path}:${from}:${to}`;
+    const oldHeaders = this.readingHeaders.get(el);
+    if (oldHeaders && (oldHeaders.signature !== headerSignature || oldHeaders.headings.length !== headings.length || oldHeaders.headings.some((heading, at) => heading !== headings[at]) || oldHeaders.nodes.some(node => !el.contains(node)))) oldHeaders.child.unload();
+    if (headings.length && !this.readingHeaders.has(el)) {
+      const child = this.readingChild(el, ctx);
+      this.readingHeaders.set(el, { child, headings, nodes: [], signature: headerSignature });
+      child.register(() => { if (this.readingHeaders.get(el)?.child === child) this.readingHeaders.delete(el); });
+    }
+    const headers = this.readingHeaders.get(el);
+    if (headers) {
+      this.decorateHeadings(el, doc, from, to, this.index, headers.child);
+      // Native partial rerenders can replace just a badge/link while keeping the heading container.
+      headers.nodes = [];
+      for (const heading of headings) {
+        headers.nodes.push(...Array.from(heading.querySelectorAll('[data-hybrid-badge], .hybrid-slug')));
+        const metadata = heading.nextElementSibling;
+        if (metadata?.matches('.hybrid-metadata')) headers.nodes.push(metadata, ...Array.from(metadata.querySelectorAll('a')));
+      }
+    }
     const anchors = this.idAnchors(el, doc, from, to, this.index);
     const linkSignature = `${this.revision}:${doc.path}:${from}:${to}`;
     const oldLinks = this.readingLinks.get(el);
@@ -585,7 +759,7 @@ export class HybridController {
     const plan = planDisplay(doc, [], target => resolveHybrid(this.index, target, doc.path));
     const consumed = new Set<HTMLElement>();
     for (const span of plan.spans.filter(s => s.kind === 'embed' && s.from >= from && s.to <= to)) {
-      const native = Array.from(el.querySelectorAll<HTMLElement>('.internal-embed')).find(node => {
+      const native = Array.from(el.querySelectorAll<HTMLElement>('.internal-embed, .hybrid-managed-embed')).find(node => {
         const previous = this.readingEmbeds.get(node);
         // A partial native rerender may omit an earlier occurrence of the same target.
         return !consumed.has(node) && !node.closest('pre, code, blockquote, [data-hybrid-render]') &&
@@ -601,8 +775,17 @@ export class HybridController {
       const previous = this.readingEmbeds.get(native);
       if (previous?.signature === signature && native.contains(previous.wrapper)) continue;
       previous?.child.unload();
+      // Native Obsidian populates .internal-embed placeholders after postprocessing.
+      // Once this source-matched occurrence is ours, prevent its filename/block
+      // renderer from replacing the complete tree with a one-block excerpt.
+      const wasNativeEmbed = native.classList.contains('internal-embed');
+      native.classList.remove('internal-embed'); native.classList.add('hybrid-managed-embed');
       const wrapper = el.ownerDocument.createElement('div'); wrapper.className = 'hybrid-embed'; native.replaceChildren(wrapper);
       const child = this.readingChild(wrapper, ctx);
+      child.register(() => {
+        native.classList.remove('hybrid-managed-embed');
+        if (wasNativeEmbed) native.classList.add('internal-embed');
+      });
       this.readingEmbeds.set(native, { section: el, child, wrapper, path: doc.path, source: doc.source, from: span.from, signature });
       child.register(() => { if (this.readingEmbeds.get(native)?.child === child) this.readingEmbeds.delete(native); });
       child.register(this.renderEmbed(wrapper, span.target ?? '', span.flags!, doc.path, child, this.index));

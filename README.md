@@ -2,13 +2,14 @@
 
 Markdownを正本にしたまま、Foresterのtree/subtree・参照・transclusionをObsidianで扱うテーマ＋プラグインです。
 
-> **`v2` はhybrid実装の開発ブランチ、`2.0`（タグ`2.0.0`）はPre-releaseです。正式な安定版ではありません。** 新しいhybrid modeはopt-inです。既存のlegacy modeを残し、通常ノートを一括変換しません。自動テストと独立レビューは合格していますが、Native Obsidian Desktop/Mobileの実機受入は未実施です。
+> **`v2` はhybrid実装の開発ブランチ、`2.0`（タグ`2.0.0`）はPre-releaseです。正式な安定版ではありません。** 新しいhybrid modeはopt-inです。既存のlegacy modeを残し、通常ノートを一括変換しません。初回2.0.0で報告された起動硬直への性能改善を含みますが、本番での完全な原因確定・修正版の実機受入は未完了です。まず別vaultで検証してください。経緯は [STARTUP-INCIDENT.md](STARTUP-INCIDENT.md)。
 
 ## v2でできること
 
 - H2〜H6をsubtreeとして扱い、root/subtree共通のID索引で参照を解決。
 - Live PreviewとReading viewでtaxon・文脈番号・embed・引用を表示。編集対象の構文はソースへ戻す。
 - 必要時に固定IDを付与し、`[[Note#Heading]]`を`[[Note#^ID]]`へ安全側で確定。曖昧な参照や競合は変更しない。
+- 有効ノート間の通常リンクは保存時に `[[元のtarget|参照先title]]` へ補完。明示ラベル・embed・保護領域は変更しない。
 - `![[Note#^ID]] %%ht%%`で、そのembedの見出し全体とTOC項目を非表示。
 - `{ref:[[Reference note]]}`を文献metadataによる簡易著者年表示に変換。
 - `\{ ... }`内の生Foresterを保持・ハイライト。**評価・import実行はしない。**
@@ -78,7 +79,9 @@ publish: false
 
 `authors`と`dates`は標準Properties UIで**リスト型**にし、`[[miya]]`や`[[2026-10-04]]`を入力します。保存時のYAML引用符はObsidianに管理させ、手入力しません。日付ノートへのリンクはDate型の値とは別です。
 
-現版はこのwikilink文字列の保持と親子継承に対応しています。ただし、**人物/日付ノートから表示名・日付値を取得する層は未実装**です。hybridの帰属metadataは複数形 `authors` / `dates`。単数形 `author` / `date`は通常の未知frontmatterとして保持されます。
+現版はwikilink文字列の保持と親子継承に加え、tree headerの著者・日付リンクを共通索引で解決し、参照先titleまたは明示ラベルで表示します。ISO形式の日付ラベルは読みやすく整形しますが、日付ノートの任意プロパティから値を推論する機能ではありません。hybridの帰属metadataは複数形 `authors` / `dates`。単数形 `author` / `date`は通常の未知frontmatterとして保持されます。
+
+`contributors`と認識済みnative propertiesは宣言したtreeに保持しますが、著者・日付と同じようには継承しません。`author: false`はnativeの表示抑制指定として保持される例外です。追加properties・contributors・BibTeXの完全なnative描画や、この表示抑制指定のheader反映は未実装です。
 
 文献用はノート著者とは別です：
 
@@ -123,7 +126,7 @@ CLIはソースを書き換えず、hidden directoryとsymlinkを辿りません
 
 ```sh
 cd plugin
-npm test              # hybrid 495件 + legacy 57 checks
+npm test              # hybrid 570件 + legacy 57 checks + CSS 10件（この差替え時点）
 npm run build         # TypeScript + production bundle
 npm run test:browser  # 実Chromium + CodeMirror
 npm audit --omit=dev
@@ -147,4 +150,4 @@ manifest.json, theme.css     任意のForesterテーマ
 scripts/install.sh          既存のテーマ/プラグイン導入helper
 ```
 
-Datalog、全文検索統合、全Forester評価、トランスパイラ適合、本番pipeline移行、metadata関係解決は現版の完了範囲に含めません。
+Datalog、全文検索統合、全Forester評価、トランスパイラ適合、本番pipeline移行、完全なmetadata関係モデルは現版の完了範囲に含めません。同じ2.0.0の差替えなので、自動更新が検出されない場合はPre-releaseの3ファイルを再取得してください。

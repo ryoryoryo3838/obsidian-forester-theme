@@ -22,8 +22,20 @@ body.forester-enabled.theme-dark {
 	--forester-slug: #888;
 }
 
-/* Opt-in hybrid decorations use the current Obsidian theme, not fixed page colours. */
-.hybrid-taxon-number { color: var(--text-accent); font-size: .85em; margin-inline-end: .4em; }
+/* Opt-in hybrid decorations use the current Obsidian theme, not fixed page colours.
+   Forester taxon/number labels stay monochrome: use body ink, not heading/accent colours. */
+.hybrid-taxon-number { color: var(--text-normal); font-size: .85em; margin-inline-end: .4em; }
+/* Native top-level taxon is a muted line above the title; subtree labels remain inline. */
+.hybrid-taxon-number.hybrid-root-taxon { display: block; color: var(--text-muted, #888); font-size: 1rem; font-weight: normal; line-height: 1.4; margin: 0 0 .15em; }
+.hybrid-slug { display: inline; color: var(--text-muted, gray); font-family: var(--font-monospace, monospace); font-size: .7em; font-weight: normal; text-decoration: none; cursor: pointer; white-space: nowrap; }
+.hybrid-slug:hover { text-decoration: underline; }
+.hybrid-metadata { color: var(--text-muted); font-size: .9rem; margin-block: .15em .6em; }
+.hybrid-metadata ul { list-style: none; padding: 0; margin: 0; }
+.hybrid-metadata li { display: inline; }
+.hybrid-metadata li + li::before { content: " · "; }
+.hybrid-metadata address { display: inline; font-style: normal; }
+.hybrid-tree-header h1, .hybrid-tree-header h2 { margin-block: .25em; }
+.hybrid-bibtex { white-space: pre-wrap; font-size: .85rem; }
 .hybrid-embed { border-inline-start: 2px solid var(--background-modifier-border); padding-inline-start: .75em; margin-block: .4em; }
 .hybrid-embed h3 { margin-block: .25em; }
 .hybrid-raw { white-space: pre-wrap; border-radius: var(--radius-s); background: var(--background-secondary); padding: .15em .3em; }

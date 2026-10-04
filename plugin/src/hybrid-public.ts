@@ -1,5 +1,6 @@
 import type { HybridDiagnostic, HybridDocument, HybridIndex, HybridTree, PublicProjection, PublicTree, SourceRange } from './hybrid-types';
 import { inlineCodeEnd, resolveHybrid } from './hybrid-core';
+import { decodeWikilinkLabel, encodeWikilinkLabel } from './hybrid-literal-label';
 
 function error(code: string, message: string): HybridDiagnostic {
   return { code, message, path: '', severity: 'error' };
@@ -199,7 +200,11 @@ function referenceText(document: HybridDocument, index: HybridIndex, diagnostics
     }
     return `## ${plainText(target.meta.title)}\n\n${projectedBody(targetDocument, target, index, diagnostics, [...stack, target.key], budget)}`;
   }
-  return target.id ? `[[${target.id}|${plainText(label ?? target.meta.title)}]]` : plainText(label ?? target.meta.title);
+  // Source aliases have one entity layer; semantic metadata titles have none.
+  // Requote decoded labels so Markdown/comments/math cannot reactivate in output.
+  const displayLabel = label === undefined ? target.meta.title : decodeWikilinkLabel(label);
+  const literalLabel = encodeWikilinkLabel(displayLabel);
+  return target.id ? `[[${target.id}|${literalLabel}]]` : literalLabel;
 }
 
 function safeLive(active: string, diagnostics: HybridDiagnostic[]): boolean {

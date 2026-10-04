@@ -78,6 +78,16 @@ export function treeOutline(doc:HybridDocument,resolve:(target:string,path?:stri
   return walk(doc,doc.root,'',new Set([doc.root.key]),0,true);
 }
 export interface DisplayPlan { headings: Array<{at:number;label:string;title:string}>; spans: DisplaySpan[]; }
+/** Find the root's source H1 once, excluding examples/frontmatter; root.from remains document offset 0. */
+export function rootHeadingAt(doc:HybridDocument):number|null {
+  if(doc.root.headingTitle===null)return null;
+  let at=0;
+  for(const line of doc.source.split('\n')) {
+    if(/^ {0,3}#[ \t]+/.test(line)&&!doc.protectedRanges.some(r=>r.from<=at&&at<r.to))return at;
+    at+=line.length+1;
+  }
+  return null;
+}
 export function planDisplay(doc: HybridDocument, selections: SourceRange[], resolve: (target:string,path?:string) => HybridResolution): DisplayPlan {
   const plan: DisplayPlan = {headings:[],spans:[]};
   if (!doc.enabled) return plan;
