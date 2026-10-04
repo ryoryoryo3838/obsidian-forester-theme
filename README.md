@@ -39,6 +39,12 @@ plugin/styles.css
 
 Community pluginsでForesterを有効化します。plugin IDは既存版と同じ `forester` なので、既存版を使っているvaultへ最初から上書きしないでください。テーマの導入は任意です。
 
+### v2対応テーマ
+
+`v2`ブランチのルート `theme.css` と `manifest.json` が対応テーマです。BIZ UDMincho系の本文・既存の埋込みInria Sansを維持し、hybridのroot taxon、IDの点線リンク、著者・日付のmetadata行、13ptのsubtree見出し、枠のない組み込み表示を整えています。light/darkとtheme/pluginの両CSS読み込み順でChromium検証済みです。フォントが未インストールの場合の本文フォールバックは従来どおりです。
+
+テストvaultの `.obsidian/themes/Forester/` にこの2ファイルを置き、外観設定で **Forester** を選択します。`plugin/styles.css` はプラグイン用なので、`theme.css`の代わりには使いません。対応テーマの最新版は`v2`ブランチから取得してください（今回のテーマ更新で既存2.0.0タグ・プラグインReleaseは変更していません）。
+
 テーマも含めてコピーする既存helperもあります。**指定先のForesterファイルを置き換えるので、テストvaultだけに使います。**
 
 ```sh
@@ -126,7 +132,7 @@ CLIはソースを書き換えず、hidden directoryとsymlinkを辿りません
 
 ```sh
 cd plugin
-npm test              # hybrid 570件 + legacy 57 checks + CSS 10件（この差替え時点）
+npm test              # hybrid 570件 + legacy 57 checks + CSS/theme 15件（v2ブランチ）
 npm run build         # TypeScript + production bundle
 npm run test:browser  # 実Chromium + CodeMirror
 npm audit --omit=dev

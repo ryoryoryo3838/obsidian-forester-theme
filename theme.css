@@ -1,5 +1,5 @@
 /*
- * Forester — an Obsidian theme that matches the published forest.
+ * Forester v2 — hybrid and legacy Obsidian visuals matching the published forest.
  *
  * Every value here is ported from `site/theme/style.css` (the XSLT theme that
  * renders `.tree` files on the web). Where a rule is a direct port, the comment
@@ -351,4 +351,102 @@
 	line-height: 1.2;
 	margin-bottom: 0;
 	letter-spacing: 0;
+}
+
+/* ── Hybrid v2 ─────────────────────────────────────────────────────────────── */
+/* Plugin styles remain structural. This companion layer restores the native
+   Forester typography and unframed transclusions for both renderer hosts.
+   Host-qualified selectors win regardless of theme/plugin CSS load order. */
+.theme-light,
+.theme-dark {
+	--forester-hybrid-root-taxon: #888;
+	--forester-hybrid-slug: #888;
+	--forester-hybrid-hover: rgba(0, 100, 255, 0.04);
+}
+.theme-dark {
+	--forester-hybrid-hover: rgba(120, 170, 255, 0.07);
+}
+
+.markdown-rendered .hybrid-tree-header,
+.markdown-source-view.mod-cm6 .hybrid-tree-header {
+	font-family: var(--font-text-theme);
+}
+.markdown-rendered .hybrid-tree-header h1,
+.markdown-source-view.mod-cm6 .hybrid-tree-header h1 {
+	font-size: 1.5em;
+	font-weight: bold;
+	line-height: 1.2;
+}
+.markdown-rendered .hybrid-tree-header h2,
+.markdown-rendered .hybrid-tree-body :is(h2, h3, h4, h5, h6),
+.markdown-source-view.mod-cm6 .hybrid-tree-header h2,
+.markdown-source-view.mod-cm6 .hybrid-tree-body :is(h2, h3, h4, h5, h6),
+.markdown-source-view.mod-cm6 .hybrid-tree-heading.HyperMD-header:not(.HyperMD-header-1) {
+	font-size: 13pt;
+	font-weight: bold;
+	line-height: 1.2;
+}
+.markdown-rendered .hybrid-taxon-number,
+.markdown-source-view.mod-cm6 .hybrid-taxon-number {
+	color: var(--text-normal);
+	font-weight: bolder;
+}
+.markdown-source-view.mod-cm6 .hybrid-header-taxon {
+	font-size: 1.5em;
+}
+.markdown-rendered .hybrid-taxon-number.hybrid-root-taxon,
+.markdown-source-view.mod-cm6 .hybrid-taxon-number.hybrid-root-taxon {
+	display: block;
+	color: var(--forester-hybrid-root-taxon);
+	font-size: 0.9em;
+	font-weight: bolder;
+	padding-bottom: 5pt;
+	margin: 0;
+}
+.markdown-rendered a.hybrid-slug,
+.markdown-source-view.mod-cm6 a.hybrid-slug {
+	color: var(--forester-hybrid-slug);
+	font-family: inherit;
+	font-size: 0.9em;
+	font-weight: 200;
+	text-decoration-line: underline;
+	text-decoration-style: dotted;
+	box-shadow: none;
+}
+.markdown-rendered .hybrid-metadata,
+.markdown-source-view.mod-cm6 .hybrid-metadata {
+	color: var(--text-normal);
+	font-family: var(--font-text-theme);
+	font-size: 0.9em;
+}
+.markdown-rendered .hybrid-metadata ul,
+.markdown-source-view.mod-cm6 .hybrid-metadata ul {
+	display: inline;
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+.markdown-rendered .hybrid-embed,
+.markdown-source-view.mod-cm6 .hybrid-embed {
+	border: none;
+	border-radius: var(--forester-radius);
+	background: none;
+	padding: 0 10px 2px 5px;
+	margin-block: 0.4em;
+}
+@media (hover: hover) {
+	.markdown-rendered .hybrid-embed:hover,
+	.markdown-source-view.mod-cm6 .hybrid-embed:hover {
+		background-color: var(--forester-hybrid-hover);
+	}
+}
+.markdown-rendered .hybrid-toc,
+.markdown-source-view.mod-cm6 .hybrid-toc {
+	font-family: var(--font-interface-theme);
+	font-size: 0.9em;
+}
+.markdown-rendered .hybrid-raw,
+.markdown-source-view.mod-cm6 .hybrid-raw {
+	font-family: var(--font-monospace-theme);
+	background-color: var(--code-background);
 }
