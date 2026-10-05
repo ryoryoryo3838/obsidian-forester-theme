@@ -2,20 +2,23 @@
 
 Markdownを正本にしたまま、Foresterのtree/subtree・参照・transclusionをObsidianで扱うテーマ＋プラグインです。
 
-> **`v2` はhybrid実装の開発ブランチ、`2.0`（タグ`2.0.0`）はPre-releaseです。正式な安定版ではありません。** 新しいhybrid modeはopt-inです。既存のlegacy modeを残し、通常ノートを一括変換しません。初回2.0.0で報告された起動硬直への性能改善を含みますが、本番での完全な原因確定・修正版の実機受入は未完了です。まず別vaultで検証してください。経緯は [STARTUP-INCIDENT.md](STARTUP-INCIDENT.md)。
+> **`v2` は開発ブランチ、`2.0`（タグ`2.0.0`）はPre-releaseです。正式な安定版ではありません。** この差替えでは全Markdownノートを既定でForesterとして扱い、除外フォルダでopt-outします。既存ノートを起動時に一括変換する機能ではありませんが、対象ノートを編集するとH2〜H6へ自動IDを付けるため、まず別vaultで検証してください。初回2.0.0の起動硬直の完全な原因確定・本番総合受入は未完了です。経緯は [STARTUP-INCIDENT.md](STARTUP-INCIDENT.md)。
 
 ## v2でできること
 
 - H2〜H6をsubtreeとして扱い、root/subtree共通のID索引で参照を解決。
 - Live PreviewとReading viewでtaxon・文脈番号・embed・引用を表示。編集対象の構文はソースへ戻す。
-- 必要時に固定IDを付与し、`[[Note#Heading]]`を`[[Note#^ID]]`へ安全側で確定。曖昧な参照や競合は変更しない。
+- 編集が落ち着いた対象ノートのH2〜H6すべてへ固定IDを付与。rootは必要時に発行し、既存IDは保持する。
+- `[[Note#Heading]]`を`[[Note#^ID]]`へ安全側で確定。曖昧な参照や競合は変更しない。
+- `/subtree`で節を作成、`/transclude`・`/link`でID・title・ファイル名からtreeを検索して組み込み／リンクを挿入。
+- Forester TOC／Backlinks／Related／Referencesを個別のサイドバータブとして表示。
 - 有効ノート間の通常リンクは保存時に `[[元のtarget|参照先title]]` へ補完。明示ラベル・embed・保護領域は変更しない。
 - `![[Note#^ID]] %%ht%%`で、そのembedの見出し全体とTOC項目を非表示。
 - `{ref:[[Reference note]]}`を文献metadataによる簡易著者年表示に変換。
 - `\{ ... }`内の生Foresterを保持・ハイライト。**評価・import実行はしない。**
 - 非公開を既定にした公開JSON抽出。非公開本文は配信データへ入れず、危険・曖昧な依存は公開拒否。
 
-詳しいcontractは [HYBRID.md](HYBRID.md)、検証結果は [ACCEPTANCE.md](ACCEPTANCE.md)。旧サイト/tree-md互換モードの説明は [LEGACY.md](LEGACY.md) に分離しています。
+詳しいcontractは [HYBRID.md](HYBRID.md)、この差替えの検証範囲と実機の未確認事項は [ACCEPTANCE-V2-WORKSPACE.md](ACCEPTANCE-V2-WORKSPACE.md)。旧opt-in版の受入記録は [ACCEPTANCE.md](ACCEPTANCE.md)、旧サイト/tree-md規約は [LEGACY.md](LEGACY.md) に分離しています。
 
 ## ビルドと導入
 
@@ -43,7 +46,7 @@ Community pluginsでForesterを有効化します。plugin IDは既存版と同�
 
 `v2`ブランチのルート `theme.css` と `manifest.json` が対応テーマです。BIZ UDMincho系の本文・既存の埋込みInria Sansを維持し、hybridのroot taxon、IDの点線リンク、著者・日付のmetadata行、13ptのsubtree見出し、枠のない組み込み表示を整えています。light/darkとtheme/pluginの両CSS読み込み順でChromium検証済みです。フォントが未インストールの場合の本文フォールバックは従来どおりです。
 
-テストvaultの `.obsidian/themes/Forester/` にこの2ファイルを置き、外観設定で **Forester** を選択します。`plugin/styles.css` はプラグイン用なので、`theme.css`の代わりには使いません。対応テーマの最新版は`v2`ブランチから取得してください（今回のテーマ更新で既存2.0.0タグ・プラグインReleaseは変更していません）。
+テストvaultの `.obsidian/themes/Forester/` にこの2ファイルを置き、外観設定で **Forester** を選択します。`plugin/styles.css` はプラグイン用なので、`theme.css`の代わりには使いません。対応テーマは`v2`ブランチのルート、またはReleaseの `forester-theme.zip`（テーマ用のmanifest同梱）から取得します。Release直下の `manifest.json` はプラグイン用です。
 
 テーマも含めてコピーする既存helperもあります。**指定先のForesterファイルを置き換えるので、テストvaultだけに使います。**
 
@@ -58,7 +61,6 @@ cd ..
 
 ```markdown
 ---
-forester-mode: true
 forester-id: ABCDEF
 title: Information concepts
 publish: false
@@ -74,12 +76,25 @@ publish: false
 ![[Other note#^C1D2E3]] %%ht%%
 ```
 
-- `forester-mode: true`でそのノートを有効化。設定の **Hybrid folders** でフォルダをopt-inすることもできます。
-- `forester-mode: false`は有効フォルダ内でもopt-out。
+- `forester-mode`は不要です。既存の値は保持しますが、構文有効化／無効化には使いません。
+- Foresterとして扱わない範囲は設定の **Excluded folders** にvault相対のフォルダを一行ずつ指定します。子フォルダも除外します。
+- 除外範囲ではプラグインによるID付与・入力支援・旧モードへのfallbackを行いません。
 - root IDはfrontmatterの `forester-id`、subtree IDは見出し末尾の `^ID`。旧 `id`を黙って再解釈しません。
 - 自動IDは大文字6桁16進、数字だけ6桁は手動用に予約。手動IDは英数字・ハイフンで、長さ/16進制約なし。
 - taxonは見出し直後の専用タグ行、またはmetadataで指定。通常のタグやファイル名とIDを混同しません。
 - `examples/hybrid-demo/`には架空資料だけのサンプルを置いています。
+
+## サイドバーと入力支援
+
+コマンドパレットの **Open Forester TOC / Backlinks / Related / References** で、それぞれのタブを開きます。
+
+- TOCの見出し：表示中のsectionへ移動。組み込み項目もその表示箇所へ移動し、定義元を開く操作とは分けます。
+- TOCの **■**：アドレスを持つ定義元treeへ移動。
+- Backlinks：現在treeを直接リンクしているtree。Related：現在treeが直接リンクする、Reference以外のtree。
+- References：現在treeとその包含・組み込み先が参照するReference。組み込みだけではBacklinks／Relatedになりません。
+- 関係項目を開くと実ファイルへ移動し、subtreeの場合はID位置へ移動します。Ctrl/Cmdクリックは新しいleafへ開きます。TOCのページ内移動やカーソル移動だけでは、関係タブの対象treeを変えません。
+
+`/subtree`は新しいH2を作成し、`/transclude`・`/link`はtreeを検索するピッカーを開きます。コマンドパレットの **Mint address for subtree at cursor** もhybrid用ID処理へ接続します。キー割当はObsidian設定で行い、既存割当を上書きする既定hotkeyは追加しません。
 
 ## ノート中心のmetadata
 
@@ -100,7 +115,7 @@ publication-year: 2022
 
 ## 非公開と部分公開
 
-公開は既定でfalse。設定の **Public folders** は構文のopt-inとは独立です。意図して公開する資料だけを配置してください。
+公開は既定でfalse。設定の **Public folders** は表示／解析の対象とは独立です。意図して公開する資料だけを配置してください。
 
 ```markdown
 ## 公開する部分 ^D0C0DE
@@ -132,7 +147,7 @@ CLIはソースを書き換えず、hidden directoryとsymlinkを辿りません
 
 ```sh
 cd plugin
-npm test              # hybrid 570件 + legacy 57 checks + CSS/theme 15件（v2ブランチ）
+npm test              # parser/public/controller/input/sidebar/CSSの回帰
 npm run build         # TypeScript + production bundle
 npm run test:browser  # 実Chromium + CodeMirror
 npm audit --omit=dev
@@ -140,7 +155,7 @@ npm audit --omit=dev
 
 ブラウザーテストはPlaywright cacheのChromium headless shell、または `HYBRID_CHROMIUM=/absolute/path/to/chromium` が必要です。テスト実行中にブラウザーや依存packageを自動installしません。
 
-公開境界・保存/表示・参照元権限の独立レビューも合格。詳細は [ACCEPTANCE.md](ACCEPTANCE.md)。保存処理はsnapshot/CAS/rollbackを使いますが、複数ファイルの原子的filesystem transactionやあらゆる外部同期競合までは保証しません。
+公開境界・保存/表示・参照元権限は回帰テストで検証しています。今回の検証範囲と実機の未確認事項は [ACCEPTANCE-V2-WORKSPACE.md](ACCEPTANCE-V2-WORKSPACE.md)。保存処理はsnapshot/CAS/rollbackを使いますが、複数ファイルの原子的filesystem transactionやあらゆる外部同期競合までは保証しません。
 
 ## 構成
 

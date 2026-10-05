@@ -70,64 +70,15 @@ export default class ForesterPlugin extends Plugin {
     this.hybridController = new HybridController(this, () => this.settings.hybrid);
     const hybridReady = this.hybridController.initialize();
 
-		// Reading view: headings, the root title, and depth indentation.
-		this.registerMarkdownPostProcessor((el, ctx) => this.processReadingSection(el, ctx));
-
-		// Embeds are decorated from a single observer so that reading view,
-		// Live Preview, hover popovers and Canvas all go through one path.
-		// Phones have far less headroom for DOM work, so wait longer there.
-		this.rescan = debounce(() => this.decorateEmbeds(), Platform.isMobile ? 150 : 40, true);
-		const rescan = this.rescan;
-		const invalidate = () => {
-			this.dirty = true;
-			rescan();
-		};
-
-		this.observer = new MutationObserver((mutations) => {
-			// The editor mutates the DOM on every keystroke; most of that has
-			// nothing to do with embeds and must not cost a document-wide scan.
-			if (this.dirty || touchesEmbed(mutations)) rescan();
-		});
-		this.observer.observe(document.body, { childList: true, subtree: true });
-		this.register(() => this.observer?.disconnect());
-
-		this.registerEvent(
-			// `changed` hands over the new text, so an edit refreshes the source
-			// cache without a second read.
-			this.app.metadataCache.on("changed", (file, data) => {
-				// Editing a note moves the lines every transclusion of one of its
-				// subtrees points at, so no tree survives the edit.
-				// Front matter is where an identity is stated, so any change to it
-				// can move an address the whole vault resolves against.
-				this.indexStale = true;
-				if (typeof data === "string") this.recordSource(file.path, data);
-				else {
-					this.sources.delete(file.path);
-					this.trees.clear();
-				}
-				invalidate();
-			}),
-		);
-		this.registerEvent(
-			this.app.vault.on("rename", (file, oldPath) => {
-				this.sources.delete(oldPath);
-				this.trees.clear();
-				this.indexStale = true;
-				invalidate();
-			}),
-		);
-		this.registerEvent(
-			this.app.vault.on("delete", () => {
-				this.indexStale = true;
-				invalidate();
-			}),
-		);
-		this.registerEvent(this.app.workspace.on("layout-change", invalidate));
+		// All Markdown rendering is controller-owned; excluded paths remain native.
 
 		this.addCommand({
 			id: "mint-note-address",
 			name: "Mint address for this note",
-			editorCallback: (_editor, view) => this.mintNoteAddress(view.file),
+			editorCallback: (_editor, view) => this.mintNoteAddress(view.file).catch(error => {
+        console.error('Forester: failed to mint note address', error);
+        new Notice(`Forester: note address mint failed — ${error instanceof Error ? error.message : String(error)}`);
+      }),
 		});
 		this.addCommand({
 			id: "mint-subtree-address",
@@ -168,9 +119,9 @@ export default class ForesterPlugin extends Plugin {
 		this.applySaveHook();
 
 		this.addSettingTab(new ForesterSettingTab(this.app, this));
-		this.app.workspace.onLayoutReady(rescan);
+		// No document-wide legacy observer or scan is started.
 
-    // Register ordinary/legacy paths immediately; cooperative vault bootstrap must not gate their startup.
+    // Native registrations are synchronous; indexing yields cooperatively.
     await hybridReady;
 	}
 
@@ -209,7 +160,7 @@ export default class ForesterPlugin extends Plugin {
 	private treeFor(file: TFile): DocumentTree | null {
 		const source = this.sourceOf(file);
     // The hybrid controller owns these files; legacy identity/metadata rules must not rewrite them.
-    if (this.hybridController?.isEnabled(file.path, source)) return null;
+    if (this.hybridController) return null;
 
 		// Directives live in HTML comments, which the metadata cache drops, so a
 		// tree built with the raw text supersedes one built without it.
@@ -281,7 +232,7 @@ export default class ForesterPlugin extends Plugin {
 	applySaveHook(): void {
 		this.unhookSave?.();
 		this.unhookSave = null;
-		if (this.settings.lintTrigger !== "save") return;
+		if (this.hybridController || this.settings.lintTrigger !== "save") return;
 
 		const commands = (
 			this.app as unknown as {
@@ -308,6 +259,8 @@ export default class ForesterPlugin extends Plugin {
   private hybridOwns(file: TFile, source: string): boolean {
     const controller = this.hybridController;
     if (!controller) return false;
+    // Disabled means excluded/native, never a grant for the old mutation pipeline.
+    if (file.extension === "md") return true;
     if (controller.isEnabled(file.path, source)) return true;
 
     const editors = new Set<Editor>();
@@ -360,6 +313,7 @@ export default class ForesterPlugin extends Plugin {
 	 * no address is given one, so no existing address moves.
 	 */
 	private async lintActiveNote(mode: ForesterSettings["mintOnSave"]): Promise<void> {
+    if (this.hybridController) { await this.hybridController.saveActive(); return; }
 		if (mode === "off") return;
 
 		const file = this.app.workspace.getActiveFile();
@@ -620,6 +574,11 @@ export default class ForesterPlugin extends Plugin {
 	 */
 	private async mintNoteAddress(file: TFile | null): Promise<void> {
 		if (!file) return;
+    if (this.hybridController) {
+      const editor = this.app.workspace.activeEditor?.editor;
+      if (editor) await this.hybridController.mintNoteAddress(editor, file);
+      return;
+    }
     if (this.hybridOwns(file, await this.app.vault.read(file))) return;
 
 		const declared = this.app.metadataCache.getFileCache(file)?.frontmatter?.["id"];
@@ -643,6 +602,7 @@ export default class ForesterPlugin extends Plugin {
 	private async mintSubtreeAddress(editor: Editor, file: TFile | null): Promise<void> {
     // Without a bound file there is no saved ownership to verify (native ctx.file may be null).
     if (!file) return;
+    if (this.hybridController) { await this.hybridController.mintSubtreeAddress(editor, file); return; }
     const workspace = this.app.workspace, path = file.path;
     let active: typeof workspace.activeEditor, before: string, cursor: { line: number; ch: number };
     try {

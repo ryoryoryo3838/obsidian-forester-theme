@@ -10,27 +10,65 @@ const options = (overrides = {}) => ({ folders: [], publicFolders: [], reservedI
 const parse = (source, path = 'hybrid/Note.md', overrides = { folders: ['hybrid'] }) =>
   core.parseHybrid(path, source, options(overrides));
 
-test('ordinary notes stay disabled by default without source changes', () => {
+test('ordinary Markdown is active and private by default without source changes', () => {
   assert.equal(typeof core.parseHybrid, 'function');
   const source = '# Title\n## Child ^abc\n#Ref\n';
   const doc = core.parseHybrid('Note.md', source, options());
-  assert.equal(doc.enabled, false);
+  assert.equal(doc.enabled, true);
+  assert.equal(core.hybridModeEnabled(doc.path, source, options()), true);
   assert.equal(doc.source, source);
   assert.equal(doc.root.id, undefined);
-  assert.equal(doc.trees.length, 1);
+  assert.equal(doc.trees.length, 2);
+  assert.equal(doc.trees[1].id, 'abc');
+  assert.ok(doc.trees.every(tree => tree.meta.publish === false));
 });
 
-test('enablement respects folder boundaries and explicit frontmatter switches', () => {
-  assert.equal(parse('body').enabled, true);
-  assert.equal(parse('body', 'hybridish/Note.md').enabled, false);
-  assert.equal(parse('body', 'Elsewhere.md', { folders: ['/'] }).enabled, true);
-  for (const mode of ['hybrid-v1', 'hybrid-v0', 'true']) {
-    assert.equal(parse(`---\nforester-mode: ${mode}\n---\nbody`, 'Elsewhere.md', {}).enabled, true);
+test('path exclusions alone control activation with normalized descendant boundaries and case-sensitive folders', () => {
+  const opt = options({folders: ['Legacy'], excludedFolders: ['/Ignored/../Private//', './Drafts/'], publicFolders: ['/']});
+  for (const [path, enabled] of [
+    ['Elsewhere.md', true], ['hybridish/Note.md', true], ['Private/Note.md', false],
+    ['Other/../Private/Note.md', false], ['Private/Nested/Note.md', false],
+    ['Privateish/Note.md', true], ['private/Note.md', true], ['Drafts/Note.md', false],
+    ['Note.MD', true], ['Note.txt', false], ['Legacy/Note.tree', false],
+  ]) {
+    const doc = core.parseHybrid(path, '## Child\n', opt);
+    assert.equal(doc.enabled, enabled, path);
+    assert.equal(core.hybridModeEnabled(path, doc.source, opt), enabled, path);
+    if (!enabled) {
+      assert.equal(doc.trees.length, 1);
+      assert.equal(doc.root.meta.publish, false, 'public-folder settings cannot override exclusions');
+    }
   }
-  assert.equal(parse('---\nforester-mode: false\n---\nbody').enabled, false);
-  const wrongType = parse('---\nforester-mode: "false"\n---\nbody');
-  assert.equal(wrongType.enabled, false);
-  assert.ok(wrongType.diagnostics.some(d => d.code === 'invalid-mode'));
+  assert.equal(parse('## Child', 'Elsewhere.md', {excludedFolders: ['/']}).enabled, false);
+  assert.equal(parse('## Child', 'Elsewhere.md', {excludedFolders: ['', './', 'Empty/../']}).enabled, true);
+  for (const mode of ['hybrid-v1', 'hybrid-v0', 'true', 'false', '"false"', 'unknown']) {
+    const source = `---\nforester-mode: ${mode}\n---\n## Child\n`;
+    const doc = parse(source, 'Elsewhere.md', {});
+    assert.equal(doc.enabled, true, mode);
+    assert.equal(core.hybridModeEnabled(doc.path, source, options()), true, mode);
+    assert.equal(doc.source, source);
+    assert.ok(Object.hasOwn(doc.frontmatter, 'forester-mode'));
+    assert.ok(!doc.diagnostics.some(diagnostic => diagnostic.code === 'invalid-mode'));
+    assert.equal(parse(source, 'Excluded/Note.md', {excludedFolders: ['Excluded'], publicFolders: ['/']}).enabled, false);
+  }
+});
+
+test('syntax diagnostics do not change path activation and still refuse saves and public metadata', () => {
+  for (const source of ['---\npublish: true\nauthors: [\n---\n## Child\n', '---\npublish: true\n', '---\nforester-mode: *missing\n---\n']) {
+    for (const excluded of [false, true]) {
+      const opt = options({excludedFolders: excluded ? ['/'] : [], publicFolders: ['/']});
+      const doc = core.parseHybrid('Note.md', source, opt);
+      assert.equal(doc.enabled, !excluded);
+      assert.equal(core.hybridModeEnabled(doc.path, source, opt), !excluded);
+      assert.equal(doc.root.meta.publish, false);
+      assert.equal(doc.root.meta.publicTitle, false);
+      assert.equal(doc.source, source);
+      assert.ok(doc.diagnostics.some(d => d.code === 'invalid-frontmatter' && d.severity === 'error'));
+      const plan = core.planHybridSave(core.indexHybrid([doc]), doc.path, () => { throw new Error('syntax preflight must refuse before drawing'); });
+      assert.deepEqual(plan.edits, []);
+      assert.ok(plan.diagnostics.some(d => d.code === 'invalid-frontmatter'));
+    }
+  }
 });
 
 
@@ -191,7 +229,8 @@ test('identity index retains case-insensitive global duplicate roots/subtrees wi
   assert.equal(typeof core.indexHybrid, 'function');
   const a = parse('---\nforester-id: Alpha\n---\n## First ^beta\n## Duplicate ^ALPHA\n', 'hybrid/A.md');
   const b = parse('---\nforester-id: BETA\n---\n## Other ^z\n', 'hybrid/B.md');
-  const ordinary = parse('---\nforester-id: alpha\n---\n## Ignored ^beta\n', 'ordinary/O.md');
+  const ordinary = parse('---\nforester-id: alpha\n---\n## Ignored ^beta\n', 'ordinary/O.md', {excludedFolders: ['ordinary']});
+  assert.equal(ordinary.enabled, false);
   const index = core.indexHybrid([a, b, ordinary]);
   assert.equal(index.documents.size, 3);
   assert.equal(index.ids.get('alpha').length, 2);
@@ -205,7 +244,8 @@ test('identity index retains case-insensitive global duplicate roots/subtrees wi
 test('bare identity/file/alias collisions include disabled documents and remain ambiguous', () => {
   assert.equal(typeof core.resolveHybrid, 'function');
   const identity = parse('---\nforester-id: same\n---\n## Heading ^topic\n', 'hybrid/Identity.md');
-  const file = parse('---\naliases: [topic, Nick]\n---\nOrdinary', 'ordinary/same.md');
+  const file = parse('---\naliases: [topic, Nick]\n---\nOrdinary', 'ordinary/same.md', {excludedFolders: ['ordinary']});
+  assert.equal(file.enabled, false);
   const index = core.indexHybrid([identity, file]);
   assert.ok(index.diagnostics.some(d => d.code === 'file-id-collision' && d.severity === 'warning'));
   assert.ok(index.diagnostics.some(d => d.code === 'alias-id-collision' && d.severity === 'warning'));
@@ -265,10 +305,38 @@ test('ID drawing rejects invalid RNG outputs and terminates exhausted determinis
   assert.throws(() => core.drawHybridId(['FFFFFF'], [], () => 1 - Number.EPSILON), /Unable|attempt|exhaust/i);
 });
 
-test('save planning mints only a missing active root and preserves existing YAML, CRLF and snapshots', () => {
+test('settled-save mints every unaddressed H2-H6 only in the saved document without requiring a private root ID', () => {
+  const source = '---\nforester-mode: false\nunknown-property: keep\n---\n# Root\n## A\n### B ^Custom-ID\n#### C\n##### D\n###### E\n## F ##  \n';
+  const saved = parse(source, 'Notes/Saved.md', {});
+  const untouched = parse('# Other\n## Unsettled\n', 'Notes/Other.md', {});
+  const excluded = parse('---\nforester-mode: true\npublish: true\n---\n## Excluded\n', 'Excluded/Note.md', {excludedFolders: ['Excluded'], publicFolders: ['/']});
+  const ids = ['A12345', 'B12345', 'C12345', 'D12345', 'E12345'];
+  let calls = 0;
+  const plan = core.planHybridSave(core.indexHybrid([saved, untouched, excluded]), saved.path, () => ids[calls++]);
+  assert.deepEqual(plan.diagnostics, []);
+  assert.equal(calls, 5);
+  assert.equal(plan.edits.length, 1);
+  assert.equal(plan.edits[0].path, saved.path);
+  assert.equal(plan.edits[0].before, source);
+  assert.equal(plan.edits[0].after, source.replace('## A\n', '## A ^A12345\n').replace('#### C\n', '#### C ^B12345\n')
+    .replace('##### D\n', '##### D ^C12345\n').replace('###### E\n', '###### E ^D12345\n').replace('## F ##  \n', '## F ^E12345 ##  \n'));
+  assert.equal(saved.source, source);
+  assert.equal(untouched.source, '# Other\n## Unsettled\n');
+  const fixed = parse(plan.edits[0].after, saved.path, {});
+  assert.equal(fixed.root.id, undefined, 'automatic subtree IDs do not require a root route');
+  assert.equal(fixed.frontmatter['forester-mode'], false);
+  assert.deepEqual(fixed.trees.slice(1).map(tree => tree.id), ['A12345', 'Custom-ID', 'B12345', 'C12345', 'D12345', 'E12345']);
+  assert.deepEqual(fixed.trees.map(tree => [tree.meta.title, tree.level, tree.meta.publish]), saved.trees.map(tree => [tree.meta.title, tree.level, tree.meta.publish]));
+  const updated = core.indexHybrid([fixed, untouched, excluded]);
+  assert.deepEqual(updated.diagnostics, []);
+  assert.deepEqual(core.planHybridSave(updated, saved.path, () => { throw new Error('idempotence'); }), {edits: [], diagnostics: []});
+  assert.deepEqual(core.planHybridSave(updated, excluded.path, () => { throw new Error('excluded path'); }), {edits: [], diagnostics: []});
+});
+
+test('save planning mints a required public root and preserves existing YAML, CRLF and snapshots', () => {
   assert.equal(typeof core.planHybridSave, 'function');
   const source = '---\r\n# keep comment\r\nforester-mode: hybrid-v1\r\naliases: [Keep]\r\n---\r\n# Note\r\nBody\r\n';
-  const doc = parse(source, 'hybrid/S.md');
+  const doc = parse(source, 'hybrid/S.md', {publicFolders: ['hybrid']});
   const plan = core.planHybridSave(core.indexHybrid([doc]), doc.path, () => 'A12345');
   assert.equal(plan.edits.length, 1);
   assert.equal(plan.edits[0].path, doc.path);
@@ -276,12 +344,15 @@ test('save planning mints only a missing active root and preserves existing YAML
   assert.equal(plan.edits[0].after, source.replace('---\r\n# keep', '---\r\nforester-id: A12345\r\n# keep'));
   assert.equal(doc.source, source);
   assert.equal(doc.root.id, undefined);
-  const fixed = parse(plan.edits[0].after, doc.path);
+  const fixed = parse(plan.edits[0].after, doc.path, {publicFolders: ['hybrid']});
   assert.equal(fixed.root.id, 'A12345');
   assert.deepEqual(core.planHybridSave(core.indexHybrid([fixed]), doc.path, () => { throw new Error('must not mint again'); }).edits, []);
-  const plain = parse('Body', 'plain/N.md', {});
+  const plain = parse('Body', 'plain/N.md', {excludedFolders: ['plain']});
   assert.deepEqual(core.planHybridSave(core.indexHybrid([plain]), plain.path, () => { throw new Error('disabled'); }).edits, []);
-  const bare = parse('# Bare\n');
+  const idle = parse('# Private\nBody\n');
+  const idlePlan = core.planHybridSave(core.indexHybrid([idle]), idle.path, () => { throw new Error('unneeded root'); });
+  assert.deepEqual(idlePlan, {edits: [], diagnostics: []});
+  const bare = parse('# Bare\n', 'hybrid/Bare.md', {publicFolders: ['hybrid']});
   const minted = core.planHybridSave(core.indexHybrid([bare]), bare.path, () => 'B12345');
   assert.equal(minted.edits[0].after, '---\nforester-id: B12345\n---\n# Bare\n');
 });
@@ -329,7 +400,8 @@ test('save reports ambiguous/missing heading links and leaves code, math, raw, c
   const source = '---\nforester-id: SOURCE\n---\n[[Target#Dupe|x]] ![[NoSuch#H]] [[plain/Ordinary#H]] [[Target]]\n' + guarded;
   const a = parse(source, 'hybrid/Source.md');
   const b = parse('# T\n## H\n## Dupe\n## Dupe\n', 'hybrid/Target.md');
-  const disabled = parse('## H\n', 'plain/Ordinary.md');
+  const disabled = parse('## H\n', 'plain/Ordinary.md', {excludedFolders: ['plain']});
+  assert.equal(disabled.enabled, false);
   const plan = core.planHybridSave(core.indexHybrid([a, b, disabled]), a.path, () => { throw new Error('no valid heading refs'); });
   assert.equal(plan.edits.length, 1);
   assert.equal(plan.edits[0].after, source.replace('[[Target]]', '[[Target|T]]'));
@@ -339,7 +411,7 @@ test('save reports ambiguous/missing heading links and leaves code, math, raw, c
 });
 
 test('any dangerous identity in a referenced target aborts every edit before drawing IDs', () => {
-  const a = parse('[[Target#H]]\n', 'hybrid/Source.md');
+  const a = parse('[[Target#H]]\n## Automatic must not be minted\n', 'hybrid/Source.md');
   for (const target of ['---\nforester-id: DUPE\n---\n## H\n', '---\nforester-id: "bad id"\n---\n## H\n', '---\nforester-id: TARGET\n---\n## H ^X\n## Other ^x\n']) {
     const b = parse(target, 'hybrid/Target.md');
     const collision = parse('---\nforester-id: dupe\n---\n', 'hybrid/Other.md');
@@ -373,7 +445,7 @@ test('an existing subtree ID still causes its missing target root to be minted',
 });
 
 test('save allocation skips case-insensitive occupied/reserved names and reuses no generated identity', () => {
-  const a = parse('[[Target#H]]', 'hybrid/Source.md', { folders: ['hybrid'], reservedIds: ['A12345'] });
+  const a = parse('[[Target#H]]', 'hybrid/Source.md', { folders: ['hybrid'], publicFolders: ['hybrid'], reservedIds: ['A12345'] });
   const b = parse('## H\nBody', 'hybrid/Target.md');
   const c = parse('---\nforester-id: b12345\n---\n', 'hybrid/Other.md');
   const name = parse('Ordinary', 'ordinary/C12345.md');
@@ -415,7 +487,7 @@ test('malformed or multiple unescaped native heading IDs are errors and cannot b
 
 test('generated exponent-shaped hex root IDs round-trip as strings instead of YAML numbers', () => {
   for (const id of ['1E0000', '2E1234', '111E11']) {
-    const doc = parse('# Note\n');
+    const doc = parse('# Note\n', 'hybrid/Note.md', {publicFolders: ['hybrid']});
     const plan = core.planHybridSave(core.indexHybrid([doc]), doc.path, () => id);
     const fixed = parse(plan.edits[0].after, doc.path);
     assert.equal(fixed.root.id, id);
@@ -443,7 +515,13 @@ test('heading resolution uses original Markdown headings rather than overriding 
   assert.equal(core.resolveHybrid(index, '#Actual heading#Nested', doc.path).tree, doc.trees[2]);
   assert.equal(core.resolveHybrid(index, '#Semantic title', doc.path).status, 'missing');
   const plan = core.planHybridSave(index, doc.path, () => 'A12345');
-  assert.deepEqual(plan.edits, []);
+  assert.deepEqual(plan.diagnostics, []);
+  assert.equal(plan.edits.length, 1);
+  assert.equal(plan.edits[0].after, doc.source.replace('### Nested\n', '### Nested ^A12345\n'));
+  const saved = parse(plan.edits[0].after, doc.path);
+  assert.equal(saved.trees[1].id, 'actual');
+  assert.equal(core.resolveHybrid(core.indexHybrid([saved]), '#Actual heading#Nested', doc.path).tree.id, 'A12345');
+  assert.equal(core.resolveHybrid(core.indexHybrid([saved]), '#Semantic title', doc.path).status, 'missing');
 });
 
 test('a bare filename with heading cannot silently prefer a vault-root file over equal nested stems', () => {
@@ -461,8 +539,10 @@ test('lazy blockquote paragraph continuations remain protected during save plann
   const source = '---\nforester-id: ROOT\n---\n> Quoted paragraph\n[[Target#H]]\ncontinuation ![[Target#H]]\n\n## Real\nBody';
   const doc = parse(source);
   const target = parse('---\nforester-id: TARGET\n---\n## H\n', 'hybrid/Target.md');
-  const plan = core.planHybridSave(core.indexHybrid([doc, target]), doc.path, () => { throw new Error('quoted'); });
-  assert.deepEqual(plan.edits, []);
+  const plan = core.planHybridSave(core.indexHybrid([doc, target]), doc.path, () => 'A12345');
+  assert.deepEqual(plan.diagnostics, []);
+  assert.equal(plan.edits.length, 1);
+  assert.equal(plan.edits[0].after, source.replace('## Real\n', '## Real ^A12345\n'));
   for (const token of ['[[Target#H]]', 'continuation ![[Target#H]]']) {
     const from = source.indexOf(token);
     assert.ok(doc.protectedRanges.some(range => range.from <= from && range.to >= from + token.length));
@@ -546,6 +626,78 @@ test('H1 supports known taxon aliases without consuming ordinary heading tags or
   const caret = parse('# Root ^native\nBody\n');
   assert.equal(caret.root.id, undefined);
   assert.equal(core.indexHybrid([caret]).ids.size, 0);
+});
+
+test('BOM-prefixed settled saves preserve YAML offsets and line endings for required and existing root IDs', () => {
+  for (const newline of ['\n', '\r\n']) {
+    const opt = options({publicFolders: ['/']});
+    const body = '# Note\n## Child ^manual-id\n'.replace(/\n/g, newline);
+    const bare = core.parseHybrid('Bom.md', '\uFEFF' + body, opt);
+    assert.equal(bare.root.meta.title, 'Note');
+    const minted = core.planHybridSave(core.indexHybrid([bare]), bare.path, () => '1E0000');
+    assert.deepEqual(minted.diagnostics, []);
+    assert.equal(minted.edits.length, 1);
+    assert.equal(minted.edits[0].after, '\uFEFF' + `---${newline}forester-id: "1E0000"${newline}---${newline}` + body);
+    const fixed = core.parseHybrid(bare.path, minted.edits[0].after, opt);
+    assert.equal(fixed.root.id, '1E0000');
+    assert.equal(fixed.root.meta.title, 'Note');
+    assert.equal(fixed.trees[1].id, 'manual-id');
+    assert.deepEqual(fixed.diagnostics, []);
+    assert.deepEqual(core.planHybridSave(core.indexHybrid([fixed]), fixed.path, () => { throw new Error('idempotence'); }), {edits: [], diagnostics: []});
+    const source = '\uFEFF' + '---\n# preserve comment\nforester-mode: false\nforester-id: custom-Root\n---\n# Note\n## New\n'.replace(/\n/g, newline);
+    const existing = core.parseHybrid('Existing.md', source, opt);
+    assert.equal(existing.root.id, 'custom-Root');
+    const plan = core.planHybridSave(core.indexHybrid([existing]), existing.path, () => 'A12345');
+    assert.deepEqual(plan.diagnostics, []);
+    assert.equal(plan.edits[0].before, source);
+    assert.equal(plan.edits[0].after, source.replace(`## New${newline}`, `## New ^A12345${newline}`));
+    const reparsed = core.parseHybrid(existing.path, plan.edits[0].after, opt);
+    assert.equal(reparsed.root.id, 'custom-Root');
+    assert.equal(reparsed.frontmatter['forester-mode'], false);
+    assert.equal(reparsed.trees[1].id, 'A12345');
+    assert.deepEqual(core.planHybridSave(core.indexHybrid([reparsed]), reparsed.path), {edits: [], diagnostics: []});
+    const firstSource = '\uFEFF' + '## First\n```md\n## Fake\n```\n'.replace(/\n/g, newline);
+    const first = core.parseHybrid('First.md', firstSource, options());
+    assert.equal(first.trees[1]?.from, 1, 'BOM is not part of the first heading offset');
+    assert.equal(first.trees.length, 2, 'BOM does not disable protected code guards');
+    const firstPlan = core.planHybridSave(core.indexHybrid([first]), first.path, () => 'B12345');
+    assert.deepEqual(firstPlan.diagnostics, []);
+    assert.equal(firstPlan.edits[0].after, firstSource.replace(`## First${newline}`, `## First ^B12345${newline}`));
+    const malformed = core.parseHybrid('Malformed.md', '\uFEFF---\npublish: true\nauthors: [\n---\n## Child\n'.replace(/\n/g, newline), opt);
+    assert.equal(malformed.enabled, true);
+    assert.equal(malformed.root.meta.publish, false);
+    assert.ok(malformed.diagnostics.some(d => d.code === 'invalid-frontmatter'));
+    assert.deepEqual(core.planHybridSave(core.indexHybrid([malformed]), malformed.path).edits, []);
+  }
+});
+
+test('automatic heading IDs preserve protected regions, manual identities, BOM and LF/CRLF byte-for-byte', () => {
+  const guards = [
+    '```md\n## Code\n[[Target#H]]\n```', '~~~\n### Tilde\n~~~', '    ## Indented',
+    '> ## Quote\n> [[Target#H]]', '$$\n#### Display math\n[[Target#H]]\n$$',
+    '%% comment\n##### Obsidian comment\n%%', '<!--\n###### HTML comment\n-->',
+    '\\{ \\p{raw}\n## Raw\n[[Target#H]]\n}', '`literal [[Target#H]]` $[[Target#H]]$ \\( [[Target#H]] \\)',
+  ].join('\n\n');
+  for (const newline of ['\n', '\r\n']) for (const bom of ['', '\uFEFF']) {
+    const source = bom + ('---\nforester-mode: unknown\nforester-id: manual-ROOT\naliases: [Keep]\n---\n# Root ^not-a-root-id\n\n' + guards +
+      '\n\n## Visible `literal` $x$\nBody\n### Manual ^202610\n## Other ##  \n####### Not a subtree\n').replace(/\n/g, newline);
+    const doc = parse(source, 'Saved.md', {});
+    const other = parse('---\nforester-id: TARGET\n---\n## H\n', 'Target.md', {});
+    assert.deepEqual(doc.trees.slice(1).map(tree => tree.meta.title), ['Visible `literal` $x$', 'Manual', 'Other']);
+    const expected = source.replace(`## Visible \`literal\` $x$${newline}`, `## Visible \`literal\` $x$ ^A12345${newline}`)
+      .replace(`## Other ##  ${newline}`, `## Other ^B12345 ##  ${newline}`);
+    const ids = ['A12345', 'B12345'];
+    const plan = core.planHybridSave(core.indexHybrid([doc, other]), doc.path, () => ids.shift());
+    assert.deepEqual(plan.diagnostics, []);
+    assert.equal(plan.edits.length, 1);
+    assert.deepEqual(plan.edits[0], {path: doc.path, before: source, after: expected});
+    const fixed = parse(expected, doc.path, {});
+    assert.equal(fixed.root.id, 'manual-ROOT');
+    assert.equal(fixed.frontmatter['forester-mode'], 'unknown');
+    assert.deepEqual(fixed.trees.slice(1).map(tree => tree.id), ['A12345', '202610', 'B12345']);
+    assert.deepEqual(fixed.diagnostics, []);
+    assert.deepEqual(core.planHybridSave(core.indexHybrid([fixed, other]), fixed.path, () => { throw new Error('idempotence'); }), {edits: [], diagnostics: []});
+  }
 });
 
 // End of hybrid-core regression suite.

@@ -7,7 +7,7 @@ const optin = (body, extra = '') => `---\nforester-mode: hybrid-v1\n${extra}---\
 async function controller(h) { assert.equal(typeof adapter.HybridController, 'function', 'real integration class is available'); const c = new adapter.HybridController(h.plugin, h.getter); await c.initialize(); return c; }
 const spans = (state, kind) => { const out = []; for (const ds of state.facet(EditorView.decorations)) if (typeof ds.between === 'function') ds.between(0, state.doc.length, (from, to, d) => { if (d.spec.widget?.span?.kind === kind) out.push({ from, to, span: d.spec.widget.span, widget: d.spec.widget }); }); return out; };
 
-test('initialization installs native hooks and getter opts in only selected Markdown', async () => {
+test('initialization installs native hooks and getter enables all Markdown except explicit path exclusions', async () => {
   const h = createHarness({ 'ordinary.md': '# Normal', 'enabled.md': optin('# Hybrid'), 'no.md': optin('# No').replace('hybrid-v1', 'false'), 'Trees/a.md': '# Selected' });
   const originalSave = h.app.commands.commands['editor:save-file'].callback;
   const c = await controller(h);
@@ -15,14 +15,14 @@ test('initialization installs native hooks and getter opts in only selected Mark
   assert.equal(h.plugin.postprocessors.length, 1);
   assert.ok(h.plugin.commands.has('check-hybrid-trees'));
   assert.ok(h.plugin.commands.has('preview-public-projection'));
-  assert.equal(c.isEnabled('ordinary.md'), false);
+  assert.equal(c.isEnabled('ordinary.md'), true);
   assert.equal(c.isEnabled('enabled.md'), true);
-  assert.equal(c.isEnabled('no.md'), false);
-  h.options = { ...h.options, folders: ['Trees'] };
-  assert.equal(c.isEnabled('Trees/a.md'), true, 'getter sees changed settings');
-  assert.equal(c.isEnabled('no.md'), false, 'explicit false wins');
+  assert.equal(c.isEnabled('no.md'), true);
+  h.options = { ...h.options, folders: ['Legacy'], excludedFolders: ['Trees'] };
+  assert.equal(c.isEnabled('Trees/a.md'), false, 'getter sees changed settings');
+  assert.equal(c.isEnabled('no.md'), true, 'legacy mode metadata does not change activation');
   assert.equal(c.isEnabled('missing.md'), false, 'unknown source fails closed');
-  assert.equal(c.isEnabled('old.md', '---\nforester-mode: hybrid-v0\n---\n# Legacy'), false);
+  assert.equal(c.isEnabled('old.md', '---\nforester-mode: hybrid-v0\n---\n# Legacy'), true);
   for (const event of ['modify', 'create', 'rename', 'delete']) assert.ok(h.vault.events.has(event), event);
   assert.ok(h.app.metadataCache.events.has('changed'));
   assert.ok(h.workspace.events.has('editor-change'));
@@ -34,19 +34,20 @@ test('initialization installs native hooks and getter opts in only selected Mark
 test('real CodeMirror decorates only Live Preview and resolves the unsaved document overlay', async () => {
   const disk = optin('# Work\n\nOld body', 'forester-id: old-id\n');
   const unsaved = optin('# Draft\n\n{ref:[[new-id]]}\n\nEnd', 'forester-id: new-id\ncitation-authors: [Floridi]\npublication-year: 2024\n');
-  const h = createHarness({ 'Work.md': disk, 'Normal.md': '# Normal\n\n{ref:[[new-id]]}' });
+  const h = createHarness({ 'Work/Work.md': disk, 'Native/Normal.md': '# Normal\n\n{ref:[[new-id]]}' }, { folders: [], excludedFolders: ['Native/Normal.md'], publicFolders: [], reservedIds: [] });
   await controller(h);
-  const view = h.open('Work.md');
+  const view = h.open('Work/Work.md');
   let state = view.editor.attach(h.plugin.extensions, true, unsaved);
   assert.equal(spans(state, 'citation').length, 1);
   assert.equal(spans(state, 'citation')[0].span.text, '(Floridi, 2024)', 'self ID from state.doc, not disk cache');
   assert.equal(state.doc.toString(), unsaved);
   state = view.editor.attach(h.plugin.extensions, false, unsaved);
   assert.equal(spans(state, 'citation').length, 0, 'Source mode untouched');
-  state = h.open('Normal.md').editor.attach(h.plugin.extensions, true);
+  state = h.open('Native/Normal.md').editor.attach(h.plugin.extensions, true);
   assert.equal(spans(state, 'citation').length, 0, 'ordinary Live Preview untouched');
+  h.options.excludedFolders.push('Work');
   state = view.editor.attach(h.plugin.extensions, true, unsaved.replace('hybrid-v1', 'false'));
-  assert.equal(spans(state, 'citation').length, 0, 'unsaved opt-out respected');
+  assert.equal(spans(state, 'citation').length, 0, 'path exclusion overrides legacy mode metadata');
   h.plugin.unload();
 });
 
@@ -302,7 +303,7 @@ test('rendered subtree descendants keep source-positioned badges and partial Rea
 
 test('user typing during an in-flight preflight is preserved and receives a fresh settled run', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const source = optin('# Page\n\nOriginal'); const h = createHarness({ 'Page.md': source }); await controller(h); const view = h.open('Page.md');
+  const source = optin('# Page\n\n## Section\nOriginal'); const h = createHarness({ 'Page.md': source }); await controller(h); const view = h.open('Page.md');
   const read = h.vault.read; let release; let hold = true; const gate = new Promise(resolve => { release = resolve; });
   h.vault.read = async file => { if (hold) await gate; return read(file); };
   await h.workspace.emit('editor-change', view.editor, view); t.mock.timers.tick(2000); await new Promise(setImmediate);
@@ -310,13 +311,13 @@ test('user typing during an in-flight preflight is preserved and receives a fres
   await h.workspace.emit('editor-change', view.editor, view); hold = false; release(); for (let i = 0; i < 4; i++) await new Promise(setImmediate);
   assert.equal(h.vault.processes.length, 0, 'old preflight did not overwrite fresh typing');
   t.mock.timers.tick(2000); for (let i = 0; i < 4; i++) await new Promise(setImmediate);
-  assert.match(h.vault.data.get('Page.md'), /forester-id:/, 'fresh typing receives its own settled save');
+  assert.match(h.vault.data.get('Page.md'), /## Section \^[0-9A-F]{6}/, 'fresh typing receives its own settled save');
   assert.ok(view.editor.getValue().endsWith('Fresh typing')); h.plugin.unload();
 });
 
 test('disabled Markdown targets keep native embed scope instead of rendering their frontmatter as a hybrid tree', async () => {
   const plain = '---\nforester-mode: false\n---\n# Plain\n\n## Section\nNative body';
-  const h = createHarness({ 'Page.md': optin('# Page\n\n![[Plain#Section]]\n\nEnd'), 'Plain.md': plain }); await controller(h);
+  const h = createHarness({ 'Page.md': optin('# Page\n\n![[Plain#Section]]\n\nEnd'), 'Native/Plain.md': plain }, { folders: [], excludedFolders: ['Native'], publicFolders: [], reservedIds: [] }); await controller(h);
   const view = h.open('Page.md'); const state = view.editor.attach(h.plugin.extensions); const widget = spans(state, 'embed')[0].widget;
   const el = widget.toDOM({ dispatch() {}, focus() {} }); await new Promise(setImmediate);
   assert.equal(renders[0]?.source, '![[Plain#Section]]', 'delegate ordinary target to the native Markdown renderer');
@@ -354,12 +355,12 @@ test('settled saves fail closed for dirty snapshots, switched active editors, op
   t.mock.timers.enable({ apis: ['setTimeout'] });
   for (const scenario of ['dirty-source', 'dirty-target', 'switched-editor', 'opt-out', 'unload']) {
     const source = optin('# Page\n\n[[Book#Section]]'), book = optin('# Book\n\n## Section\nBody');
-    const h = createHarness({ 'Page.md': source, 'Book.md': book }); await controller(h);
+    const h = createHarness({ 'Page.md': source, 'Book.md': book }); const c = await controller(h);
     if (scenario === 'dirty-target') h.open('Book.md', book + '\nUnsaved');
     const view = h.open('Page.md', scenario === 'dirty-source' ? source + '\nUnsaved' : source);
     await h.workspace.emit('editor-change', view.editor, view);
     if (scenario === 'switched-editor') h.open('Page.md');
-    if (scenario === 'opt-out') { view.editor.value = source.replace('hybrid-v1', 'false'); await h.workspace.emit('editor-change', view.editor, view); }
+    if (scenario === 'opt-out') { h.options.excludedFolders = ['/']; await c.refresh(); }
     if (scenario === 'unload') h.plugin.unload();
     t.mock.timers.tick(2100); for (let i = 0; i < 3; i++) await new Promise(setImmediate);
     assert.equal(h.vault.processes.length, 0, scenario); assert.equal(h.vault.data.get('Book.md'), book, scenario); h.plugin.unload();
@@ -375,17 +376,17 @@ test('all plan snapshots are read before edit; a raced target rolls back source 
   h.vault.process = async (file, fn) => { reads.push(`write:${file.path}`); return process(file, fn); };
   h.vault.beforeProcess = async file => { if (file.path === 'Book.md') h.vault.data.set('Book.md', book + '\nRemote edit'); };
   await h.workspace.emit('editor-change', view.editor, view); t.mock.timers.tick(2000); for (let i = 0; i < 4; i++) await new Promise(setImmediate);
-  assert.deepEqual(reads.slice(0, reads.findIndex(e => e.startsWith('write:'))), ['read:Page.md', 'read:Book.md']);
+  assert.deepEqual(reads.slice(0, reads.findIndex(e => e.startsWith('write:'))), ['read:Page.md', 'read:Book.md', 'read:Book.md'], 'all snapshots preflight before the target is resampled at the forward mutation boundary');
   assert.equal(h.vault.data.get('Page.md'), source); assert.equal(view.editor.getValue(), source);
   assert.equal(h.vault.data.get('Book.md'), book + '\nRemote edit'); assert.ok(notices.some(n => n.includes('保存を中止'))); h.plugin.unload();
 });
 
 test('settled planning never writes disabled referenced notes and native file links remain untouched', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const source = optin('# Page\n\n[[Plain#Section|native label]]\n\n[[Plain]]'), plain = '# Plain\n\n## Section\nBody';
-  const h = createHarness({ 'Page.md': source, 'Plain.md': plain }); await controller(h); const view = h.open('Page.md');
+  const source = optin('# Page\n\n## Own\n[[Plain#Section|native label]]\n\n[[Plain]]'), plain = '# Plain\n\n## Section\nBody';
+  const h = createHarness({ 'Page.md': source, 'Native/Plain.md': plain }, { folders: [], excludedFolders: ['Native'], publicFolders: [], reservedIds: [] }); await controller(h); const view = h.open('Page.md');
   await h.workspace.emit('editor-change', view.editor, view); t.mock.timers.tick(2000); for (let i = 0; i < 4; i++) await new Promise(setImmediate);
-  assert.deepEqual(h.vault.processes, ['Page.md']); assert.equal(h.vault.data.get('Plain.md'), plain);
+  assert.deepEqual(h.vault.processes, ['Page.md']); assert.equal(h.vault.data.get('Native/Plain.md'), plain);
   assert.ok(h.vault.data.get('Page.md').includes('[[Plain#Section|native label]]\n\n[[Plain]]'));
   const el = document.createElement('section'); el.innerHTML = '<p><a class="internal-link" data-href="Plain">Plain</a></p>';
   const after = h.vault.data.get('Page.md'), line = after.split('\n').indexOf('[[Plain]]'); await h.plugin.postprocessors[0](el, h.context('Page.md', line, line));
@@ -441,7 +442,7 @@ test('a protected source occurrence cannot inherit navigation permission from th
 
 test('CodeMirror/editor failures inside commit are reported rather than swallowed by rollback handling', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const h = createHarness({ 'Page.md': optin('# Page\nBody') }); await controller(h); const view = h.open('Page.md');
+  const h = createHarness({ 'Page.md': optin('# Page\n\n## Section\nBody') }); await controller(h); const view = h.open('Page.md');
   view.editor.replaceRange = () => { throw new Error('CodeMirror facet failed'); };
   await h.workspace.emit('editor-change', view.editor, view); t.mock.timers.tick(2000); for (let i = 0; i < 4; i++) await new Promise(setImmediate);
   assert.ok(notices.some(n => n.includes('CodeMirror facet failed')), 'show the original editor error');

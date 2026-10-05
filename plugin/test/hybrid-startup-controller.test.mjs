@@ -60,14 +60,15 @@ test('activation uses current header/settings without body parse or vault overla
     const observed = counts();
     const richBody = 'text `code` text $x$. '.repeat(6400);
     for (let n = 0; n < 20; n++) {
-      assert.equal(c.isEnabled('Plain.md', richBody), false);
+      assert.equal(c.isEnabled('Plain.md', richBody), true);
       assert.equal(c.isEnabled('Plain.md', optin(richBody)), true, 'explicit frontmatter still opts in with no folders');
       assert.equal(c.isEnabled('Plain.md', '---\nforester-mode: true\n---\n' + richBody), true);
-      assert.equal(c.isEnabled('Plain.md', '---\nforester-mode: hybrid-v0\n---\n' + richBody), false, 'v0 is not adapter opt-in');
+      assert.equal(c.isEnabled('Plain.md', '---\nforester-mode: hybrid-v0\n---\n' + richBody), true, 'legacy mode is metadata, not scope');
     }
     h.options.folders.push('Trees');
     assert.equal(c.isEnabled('Trees/Plain.md'), true, 'in-place config edit is current');
-    for (const mode of ['false', 'unknown', 'hybrid-v0']) assert.equal(c.isEnabled('Trees/Plain.md', `---\nforester-mode: ${mode}\n---\n${richBody}`), false);
+    for (const mode of ['false', 'unknown', 'hybrid-v0']) assert.equal(c.isEnabled('Trees/Plain.md', `---\nforester-mode: ${mode}\n---\n${richBody}`), true);
+    h.options.excludedFolders = ['Trees']; assert.equal(c.isEnabled('Trees/Plain.md', richBody), false);
     assert.equal(c.isEnabled('Missing.md'), false);
     assert.equal(observed.parses.length, 0, 'ownership checks must not call full parseHybrid');
     assert.equal(observed.indexes, 0);
@@ -112,42 +113,43 @@ test('500/1000-note identical metadata storms are no-ops; changed batches parse 
 });
 
 test('disabled Live Preview never parses/builds an overlay; enabled same-content selections reuse it', async () => {
-  const { h, c } = await start({ 'Plain.md': '# Plain', 'Draft.md': optin('# Disk') });
+  const { h, c } = await start({ 'Native/Plain.md': '# Plain', 'Draft/Draft.md': optin('# Disk') }, { folders: [], excludedFolders: ['Native'], publicFolders: [], reservedIds: [] });
   try {
-    const view = h.open('Plain.md');
+    const view = h.open('Native/Plain.md');
     let observed = counts();
     const source = '# Unsaved ordinary\n\n' + 'text `code` text $x$. '.repeat(6400);
     let state = view.editor.attach(h.plugin.extensions, true, source);
     for (let n = 0; n < 20; n++) state = state.update({ selection: { anchor: n } }).state;
     assert.equal(observed.parses.length, 0, 'cheap disabled gate must precede full parse');
     assert.equal(observed.indexes, 0, 'ordinary selection cannot overlay the full vault');
-    assert.equal(c.overlays.has('Plain.md'), false);
+    assert.equal(c.overlays.has('Native/Plain.md'), false);
     assert.equal(spans(state, 'citation').length, 0);
 
     observed = counts();
-    const draft = h.open('Draft.md');
+    const draft = h.open('Draft/Draft.md');
     const unsaved = optin('# Draft\n\n{ref:[[draft-id]]}\n\nEnd', 'forester-id: draft-id\ncitation-authors: [Floridi]\npublication-year: 2024\n');
     state = draft.editor.attach(h.plugin.extensions, true, unsaved);
-    const overlay = c.overlays.get('Draft.md');
+    const overlay = c.overlays.get('Draft/Draft.md');
     assert.equal(spans(state, 'citation')[0].text, '(Floridi, 2024)');
     for (let n = 0; n < 20; n++) state = state.update({ selection: { anchor: n } }).state;
-    assert.deepEqual(observed.parses, ['Draft.md']);
+    assert.deepEqual(observed.parses, ['Draft/Draft.md']);
     assert.equal(observed.indexes, 1, 'selection-only updates reuse the current source overlay');
-    assert.equal(c.overlays.get('Draft.md'), overlay);
+    assert.equal(c.overlays.get('Draft/Draft.md'), overlay);
+    h.options.excludedFolders.push('Draft');
     state = state.update({ changes: { from: 0, to: state.doc.length, insert: unsaved.replace('hybrid-v1', 'false') } }).state;
     assert.equal(spans(state, 'citation').length, 0, 'unsaved opt-out clears decorations');
-    assert.equal(c.overlays.has('Draft.md'), false, 'disabled overlay is not an authorization source');
+    assert.equal(c.overlays.has('Draft/Draft.md'), false, 'disabled overlay is not an authorization source');
   } finally { h.plugin.unload(); }
 });
 
 test('index updates invalidate enabled dependencies without touching ordinary Reading/editor views', async () => {
   const { h, c } = await start({
-    'Plain.md': '# Ordinary',
+    'Native/Plain.md': '# Ordinary',
     'Page.md': optin('# Page\n\n{ref:[[book-id]]}\n\nEnd'),
     'Book.md': optin('# Book', 'forester-id: book-id\ncitation-authors: [Bates]\npublication-year: 2022\n'),
-  });
+  }, { folders: [], excludedFolders: ['Native'], publicFolders: [], reservedIds: [] });
   try {
-    const plain = h.open('Plain.md'); plain.mode = 'preview'; plain.editor.attach(h.plugin.extensions);
+    const plain = h.open('Native/Plain.md'); plain.mode = 'preview'; plain.editor.attach(h.plugin.extensions);
     const page = h.open('Page.md'); page.mode = 'preview'; page.editor.attach(h.plugin.extensions);
     const changed = h.vault.data.get('Book.md').replace('Bates', 'White');
     h.vault.data.set('Book.md', changed);
@@ -171,7 +173,7 @@ test('index updates invalidate enabled dependencies without touching ordinary Re
     c.readingEmbeds[Symbol.iterator] = () => { iterations++; return iterate(); };
     const el = document.createElement('section'); el.innerHTML = '<p>Ordinary</p>';
     const before = el.innerHTML;
-    await h.plugin.postprocessors[0](el, { sourcePath: 'Plain.md', getSectionInfo() { throw new Error('ordinary section info must not be requested'); } });
+    await h.plugin.postprocessors[0](el, { sourcePath: 'Native/Plain.md', getSectionInfo() { throw new Error('ordinary section info must not be requested'); } });
     assert.equal(iterations, 0, 'ordinary postprocessor exits before scanning hybrid renderer owners');
     assert.equal(el.innerHTML, before);
   } finally { h.plugin.unload(); }
@@ -305,8 +307,8 @@ test('legacy startup hooks are available before the hybrid vault bootstrap finis
     await reading;
     assert.ok(plugin.commands.some(command => command.id === 'mint-note-address'), 'legacy command registration must not wait on full-vault IO');
     assert.ok(plugin.commands.some(command => command.id === 'retarget-heading-references'));
-    assert.equal(plugin.postprocessors.length, 2, 'legacy Reading hook is ready alongside opt-in hook');
-    assert.ok(plugin.observer, 'legacy lifecycle registration happens during cooperative bootstrap');
+    assert.equal(plugin.postprocessors.length, 1, 'only the hybrid Reading hook is registered');
+    assert.equal(plugin.observer, null, 'default-on Markdown never starts legacy global observation');
   } finally {
     release(); await loading;
     for (const cleanup of plugin.cleanups) cleanup(); plugin.onunload(); h.plugin.unload();
@@ -358,13 +360,13 @@ test('hundreds of startup diagnostics keep full local evidence without hundreds 
 test('in-place folder/public/reservation config edits invalidate same-source documents and clear disabled decorations', async () => {
   const entries = {
     'Trees/Page.md': '---\nforester-id: page-id\n---\n# Root\n\n## Child ^child-id\n#Claim\n\nBody',
-    'Outside.md': optin('# Outside\n\nBody'),
+    'Outside.md': optin('# Outside\n\n## Child\nBody'),
     'Trees/Malformed.md': '---\nbroken: [unterminated\n---\n# Private invalid body',
   };
-  const { h, c } = await start(entries, { folders: ['Trees'], publicFolders: [], reservedIds: [] });
+  const { h, c } = await start(entries, { folders: ['Trees'], excludedFolders: [], publicFolders: [], reservedIds: [] });
   try {
     const page = h.open('Trees/Page.md'); page.mode = 'preview'; page.editor.attach(h.plugin.extensions);
-    assert.equal(c.index.documents.get('Trees/Malformed.md').enabled, false, 'malformed activation is fail closed, even in a selected folder');
+    assert.equal(c.index.documents.get('Trees/Malformed.md').enabled, true, 'syntax errors retain path activation but publication still fails closed');
     const old = c.index.documents.get('Trees/Page.md');
     assert.equal(old.root.meta.publish, false);
     const observed = counts();
@@ -391,8 +393,8 @@ test('in-place folder/public/reservation config edits invalidate same-source doc
     await c.refresh();
     const candidates = ['AAAAAA', 'BBBBBB'];
     const plan = planHybridSave(c.index, 'Outside.md', () => candidates.shift());
-    assert.match(plan.edits[0].after, /forester-id: BBBBBB/, 'reservation cache follows current options without source changes');
-    h.options.folders.length = 0;
+    assert.match(plan.edits[0].after, /## Child \^BBBBBB/, 'reservation cache follows current options without source changes');
+    h.options.excludedFolders.push('Trees');
     await c.refresh();
     assert.equal(c.index.documents.get('Trees/Page.md').enabled, false);
     assert.equal(page.editor.cm.state.facet(EditorView.decorations).every(d => d.size === 0), true, 'config-only disable clears existing CodeMirror decorations');
@@ -460,14 +462,14 @@ test('legacy treeFor keeps its cached ordinary tree without full parser work and
   h.app.metadataCache.getFileCache = () => ({ frontmatter: {}, headings: [{ heading: 'Plain', level: 1, position: { start: { line: 0 } } }] });
   try {
     const file = h.vault.files.get('Plain.md'), tree = plugin.treeFor(file);
-    assert.ok(tree);
+    assert.equal(tree, null, 'hybrid or excluded Markdown never falls through to legacy formatting');
     const observed = counts();
     for (let n = 0; n < 20; n++) assert.equal(plugin.treeFor(file), tree);
     assert.equal(observed.parses.length, 0); assert.equal(observed.indexes, 0);
     h.options.folders.push('/');
     assert.equal(plugin.treeFor(file), null, 'cached legacy tree cannot override new folder ownership');
     plugin.sources.set('Plain.md', '---\nforester-mode: false\n---\n' + source);
-    assert.ok(plugin.treeFor(file), 'current explicit opt-out restores legacy behavior');
+    assert.equal(plugin.treeFor(file), null, 'legacy metadata cannot restore formatting');
   } finally { h.plugin.unload(); }
 });
 

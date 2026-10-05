@@ -111,16 +111,16 @@ test('legacy vault retargeting excludes opt-in sources using current raw text, n
   const fixed = await legacy.retargetVault();
   assert.equal(h.vault.data.get('Hybrid.md'), hybrid, 'math/raw/live links in hybrid source are all owned by hybrid');
   assert.equal(h.vault.data.get('Trees/Folder.md'), folder, 'folder opt-in is excluded too');
-  assert.equal(h.vault.data.get('Plain.md'), ordinary.replace('[[Book#Part]]', '[[ABCD01]]'));
-  assert.equal(h.vault.data.get('Disabled.md'), disabled.replace('[[Book#Part]]', '[[ABCD01]]'), 'current explicit opt-out retains legacy behavior');
-  assert.equal(fixed, 2);
+  assert.equal(h.vault.data.get('Plain.md'), ordinary);
+  assert.equal(h.vault.data.get('Disabled.md'), disabled, 'excluded or legacy-mode metadata never grants legacy write permission');
+  assert.equal(fixed, 0); assert.equal(h.vault.processes.length, 0);
   h.plugin.unload();
 });
 
 test('legacy referenced-heading minting never writes an opt-in target', async () => {
   const source = '# Page\n\n[[Hybrid#Part]] [[Plain#Part]]';
   const hybrid = optin('# Hybrid\n\n## Part\nBody'), plain = '# Plain\n\n## Part\nBody';
-  const h = createHarness({ 'Page.md': source, 'Hybrid.md': hybrid, 'Plain.md': plain });
+  const h = createHarness({ 'Page.md': source, 'Hybrid.md': hybrid, 'Plain.md': plain }, { folders: [], excludedFolders: ['Plain.md'], publicFolders: [], reservedIds: [] });
   const c = await controller(h), legacy = new LegacyPlugin(h.app);
   legacy.hybridController = c;
   legacy.sources = new Map(h.vault.data);
@@ -129,9 +129,9 @@ test('legacy referenced-heading minting never writes an opt-in target', async ()
   h.app.metadataCache.getFileCache = file => ({ headings: [{ level: 1, heading: file.basename }] });
   const minted = await legacy.addressReferencedHeadings(h.vault.files.get('Page.md'), () => 'A0BC01');
   assert.equal(h.vault.data.get('Hybrid.md'), hybrid, 'legacy does not mint a heading even when its cache predates opt-in');
-  assert.equal(h.vault.data.get('Plain.md'), plain.replace('## Part', '## Part ^A0BC01'));
-  assert.equal(minted, 1);
-  assert.deepEqual(h.vault.processes, ['Plain.md']);
+  assert.equal(h.vault.data.get('Plain.md'), plain);
+  assert.equal(minted, 0);
+  assert.deepEqual(h.vault.processes, []);
   h.plugin.unload();
 });
 
@@ -147,15 +147,13 @@ test('legacy note-address command skips current opt-in Markdown but still mints 
   await legacy.mintNoteAddress(h.vault.files.get('Hybrid.md'));
   assert.equal(frontmatterWrites.length, 0, 'no legacy id frontmatter write to opt-in note');
   await legacy.mintNoteAddress(h.vault.files.get('Disabled.md'));
-  assert.equal(frontmatterWrites.length, 1);
-  assert.equal(frontmatterWrites[0].path, 'Disabled.md');
-  assert.ok(frontmatterWrites[0].frontmatter.id);
+  assert.equal(frontmatterWrites.length, 0, 'there is no legacy frontmatter mutation path');
   h.plugin.unload();
 });
 
 test('legacy subtree-address command preserves opt-in editor text, including unsaved opt-in', async () => {
   const hybrid = optin('# Hybrid\n\n## Part\nBody'), disk = '# Draft\n\n## Part\nBody';
-  const h = createHarness({ 'Hybrid.md': hybrid, 'Draft.md': disk, 'Disabled.md': hybrid.replace('hybrid-v1', 'false') });
+  const h = createHarness({ 'Native/Hybrid.md': hybrid, 'Draft.md': disk, 'Native/Disabled.md': hybrid.replace('hybrid-v1', 'false') }, { folders: [], excludedFolders: ['Native'], publicFolders: [], reservedIds: [] });
   const c = await controller(h), legacy = new LegacyPlugin(h.app);
   legacy.hybridController = c; legacy.sources = new Map(h.vault.data);
   h.app.metadataCache.getFileCache = () => ({ frontmatter: {} });
@@ -165,16 +163,16 @@ test('legacy subtree-address command preserves opt-in editor text, including uns
     editor.setLine = (line, replacement) => editor.replaceRange(replacement, { line, ch: 0 }, { line, ch: editor.getLine(line).length });
     return view;
   };
-  for (const [path, text] of [['Hybrid.md', hybrid], ['Draft.md', optin(disk)]]) {
+  for (const [path, text] of [['Native/Hybrid.md', hybrid], ['Draft.md', optin(disk)]]) {
     const view = setup(path, text);
     // Wait for the command's saved-source ownership read; keep the original mutation assertions.
     await legacy.mintSubtreeAddress(view.editor, view.file);
     assert.equal(view.editor.getValue(), text, `${path}: extension ownership is based on current editor source`);
   }
-  const disabled = h.vault.data.get('Disabled.md'), view = setup('Disabled.md', disabled);
+  const disabled = h.vault.data.get('Native/Disabled.md'), view = setup('Native/Disabled.md', disabled);
   // The same async ownership check must finish before checking ordinary-note minting.
   await legacy.mintSubtreeAddress(view.editor, view.file);
-  assert.notEqual(view.editor.getValue(), disabled, 'explicitly disabled note retains ordinary minting');
+  assert.equal(view.editor.getValue(), disabled, 'path-excluded note never falls through to legacy minting');
   h.plugin.unload();
 });
 
@@ -280,9 +278,9 @@ test('real CodeMirror Compartment mode reconfiguration removes hybrid decoration
 test('Live Preview capture ignores links inside a native disabled embed and other read-only rendered contexts', async () => {
   const source = optin('# Page\n\n[[book-id]]\n\n![[Plain]]\n\nEnd');
   const plain = '---\nforester-mode: false\n---\n# Plain\n\n[[book-id]]';
-  const h = createHarness({ 'Page.md': source, 'Book.md': optin('# Book\nBody', 'forester-id: book-id\n'), 'Plain.md': plain });
+  const h = createHarness({ 'Page.md': source, 'Book.md': optin('# Book\nBody', 'forester-id: book-id\n'), 'Native/Plain.md': plain }, { folders: [], excludedFolders: ['Native'], publicFolders: [], reservedIds: [] });
   const c = await controller(h), view = h.open('Page.md'), state = view.editor.attach(h.plugin.extensions);
-  assert.equal(c.isEnabled('Plain.md'), false);
+  assert.equal(c.isEnabled('Native/Plain.md'), false);
   const dom = document.createElement('div');
   dom.innerHTML = '<div class="cm-line"><a class="internal-link" data-href="book-id">Live source</a></div><div class="internal-embed" src="Plain"><div class="markdown-embed-content"><a class="internal-link" data-href="book-id">Disabled native content</a></div></div><div class="markdown-rendered"><a class="internal-link" data-href="book-id">Read only</a></div>';
   const native = { dom, state, posAtDOM: () => source.indexOf('book-id') };
@@ -396,7 +394,7 @@ test('rollback after unload never restores over a concurrently modified disk sna
 
 test('controller-owned Live Preview embeds keep their bound target path while nested disabled embeds stay native', async () => {
   const source = optin('# Page\n\n[[other-id]]\n\n![[book-id]]\n\nEnd');
-  const h = createHarness({ 'Page.md': source, 'Book.md': optin('# Book\n\n[[other-id|Other]]\n\n![[Plain]]', 'forester-id: book-id\n'), 'Other.md': optin('# Other', 'forester-id: other-id\n'), 'Plain.md': '# Plain\n\n[[other-id]]' });
+  const h = createHarness({ 'Page.md': source, 'Book.md': optin('# Book\n\n[[other-id|Other]]\n\n![[Plain]]', 'forester-id: book-id\n'), 'Other.md': optin('# Other', 'forester-id: other-id\n'), 'Native/Plain.md': '# Plain\n\n[[other-id]]' }, { folders: [], excludedFolders: ['Native'], publicFolders: [], reservedIds: [] });
   h.app.renderOverride = async (text, el) => {
     el.innerHTML = text === '![[Plain]]' ? '<div class="internal-embed" src="Plain"><a class="internal-link" data-href="other-id">Native disabled</a></div>' : text.replace('[[other-id|Other]]', '<a class="internal-link" data-href="other-id">Owned Other</a>');
   };

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { parseHybrid, indexHybrid, resolveHybrid, planHybridSave } from './build/hybrid-core.mjs';
 import { projectPublic } from './build/hybrid-public.mjs';
 
-const options = { folders: ['hybrid'], publicFolders: [], reservedIds: [] };
+const options = { folders: ['hybrid'], excludedFolders: ['ordinary'], publicFolders: [], reservedIds: [] };
 const privateBody = 'CANARY-PRIVATE-BODY';
 
 function parse(path, source) {

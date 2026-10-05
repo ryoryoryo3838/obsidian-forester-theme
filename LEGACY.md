@@ -1,6 +1,6 @@
 # Legacy mode documentation
 
-This preserves the original site-compatible documentation. Hybrid v2 behavior is documented separately in [README.md](README.md) and [HYBRID.md](HYBRID.md). Legacy mobile rendering claims and tree-md conventions do not establish hybrid-mode compatibility.
+This preserves the original site-compatible documentation as historical/reference material. The default-on v2 entrypoint does not activate these legacy write/render paths or use them as a fallback for excluded notes. Current behavior is documented in [README.md](README.md) and [HYBRID.md](HYBRID.md). Legacy mobile rendering claims and tree-md conventions do not establish current compatibility.
 
 # obsidian-forester-theme
 

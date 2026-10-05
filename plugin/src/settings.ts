@@ -4,7 +4,7 @@ import { DEFAULT_POLICY, checkPolicy, encode, type AddressPolicy } from "./mint"
 import { DEFAULT_HYBRID, type HybridOptions } from "./hybrid-types";
 
 export interface ForesterSettings {
-  /** Opt-in dialect scope and independent publication allowlist. Empty means private/disabled. */
+  /** Markdown exclusion scope and independent publication allowlist; private by default. */
   hybrid: HybridOptions;
 	/** Rewrite `![[x]]` into a Forester transclusion block. */
 	transclusionHeaders: boolean;
@@ -39,7 +39,7 @@ export interface ForesterSettings {
 }
 
 export const DEFAULT_SETTINGS: ForesterSettings = {
-  hybrid: { ...DEFAULT_HYBRID, folders: [], publicFolders: [], reservedIds: [] },
+  hybrid: { ...DEFAULT_HYBRID, folders: [], excludedFolders: [], publicFolders: [], reservedIds: [] },
 	transclusionHeaders: true,
 	numberSubtrees: true,
 	showSlugs: true,
@@ -58,14 +58,14 @@ export class ForesterSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-    containerEl.createEl('h3', {text:'Hybrid Markdown (opt-in)'});
+    containerEl.createEl('h3', {text:'Hybrid Markdown'});
     const lists: Array<[keyof HybridOptions,string,string]> = [
-      ['folders','Hybrid folders','One vault-relative folder per line. Empty disables the dialect by default. Use / only to intentionally enable the whole vault. A note can override with forester-mode: true/false.'],
-      ['publicFolders','Public folders','Separate from syntax enablement. Default is private. Every file placed in these folders inherits public status; only opt-in files are projected. No automatic upload occurs.'],
+      ['excludedFolders','Excluded folders','All Markdown notes use Forester trees by default. One vault-relative folder per line to leave entirely native: no plugin formatting or writes. Legacy folders and forester-mode do not change syntax scope.'],
+      ['publicFolders','Public folders','Separate from syntax enablement. Default is private. Every enabled file placed in these folders inherits public status. Exclusions do not grant publication permission. No automatic upload occurs.'],
       ['reservedIds','Reserved IDs','Additional IDs excluded from automatic generation. Decimal-only six-digit IDs are always reserved; automatic IDs are uppercase six-hex.']
     ];
     for (const [key,name,description] of lists) new Setting(containerEl).setName(name).setDesc(description).addTextArea(input =>
-      input.setValue(this.plugin.settings.hybrid[key].join('\n')).onChange(async value => {
+      input.setValue((this.plugin.settings.hybrid[key] ?? []).join('\n')).onChange(async value => {
         this.plugin.settings.hybrid[key] = value.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
         await this.plugin.saveSettings();
       })
@@ -116,111 +116,8 @@ export class ForesterSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		containerEl.createEl("h3", { text: "Addresses" });
-		containerEl.createEl("p", {
-			cls: "setting-item-description",
-			text:
-				"Minting policy, which must match the [id] table in tree-md.toml. " +
-				"An address that is already written is never minted over.",
-		});
-
-		new Setting(containerEl)
-			.setName("Alphabet")
-			.setDesc("Digits, most significant first. The first one is the padding digit.")
-			.addText((text) =>
-				text
-					.setPlaceholder(DEFAULT_POLICY.alphabet)
-					.setValue(this.plugin.settings.address.alphabet)
-					.onChange((value) => this.applyPolicy({ alphabet: value })),
-			);
-
-		new Setting(containerEl)
-			.setName("Width")
-			.setDesc("Minimum digits. A number past what they hold simply takes more.")
-			.addText((text) =>
-				text
-					.setValue(String(this.plugin.settings.address.width))
-					.onChange((value) => this.applyPolicy({ width: Number(value) })),
-			);
-
-		new Setting(containerEl)
-			.setName("Prefix")
-			.setDesc("Written before the digits. Must leave the result a legal identity.")
-			.addText((text) =>
-				text
-					.setValue(this.plugin.settings.address.prefix)
-					.onChange((value) => this.applyPolicy({ prefix: value })),
-			);
-
-		new Setting(containerEl)
-			.setName("Scheme")
-			.setDesc(
-				"Random, because addresses are minted from more than one place — " +
-					"tree-md, this plugin, this plugin on a phone — and two of them " +
-					"offline would hand out the same next number.",
-			)
-			.addDropdown((drop) =>
-				drop
-					.addOption("random", "Random")
-					.addOption("sequential", "Sequential")
-					.setValue(this.plugin.settings.address.scheme)
-					.onChange((value) =>
-						this.applyPolicy({ scheme: value as AddressPolicy["scheme"] }),
-					),
-			);
-
-		new Setting(containerEl)
-			.setName("What it mints")
-			.setDesc(
-				"Requests: fill in an empty `id:`, a bare `<!-- id -->`, a bare " +
-					"`<!-- hN -->`, and any heading a #Heading reference points at, so " +
-					"nothing that already had an address gets a different one. Every " +
-					"note: also address a note that states nothing, which does move it " +
-					"— from the file name to the minted id.",
-			)
-			.addDropdown((drop) =>
-				drop
-					.addOption("off", "Off")
-					.addOption("requests", "Requests only")
-					.addOption("notes", "Every note")
-					.setValue(this.plugin.settings.mintOnSave)
-					.onChange(async (value) => {
-						this.plugin.settings.mintOnSave = value as ForesterSettings["mintOnSave"];
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(containerEl)
-			.setName("When it runs")
-			.setDesc(
-				"On save wraps Obsidian's save command. Externally leaves saving " +
-					"alone and waits for the command to be called.",
-			)
-			.addDropdown((drop) =>
-				drop
-					.addOption("save", "On save")
-					.addOption("external", "When something else asks")
-					.setValue(this.plugin.settings.lintTrigger)
-					.onChange(async (value) => {
-						this.plugin.settings.lintTrigger = value as ForesterSettings["lintTrigger"];
-						await this.plugin.saveSettings();
-						this.display();
-					}),
-			);
-
-		if (this.plugin.settings.lintTrigger === "external") {
-			const how = containerEl.createEl("p", { cls: "setting-item-description" });
-			how.appendText("Add ");
-			how.createEl("code", { text: "Forester: Lint this note" });
-			how.appendText(
-				" to Linter → Custom Commands. Linter already runs on save, so " +
-					"Ctrl+S lints and then mints, in that order — the addresses are " +
-					"written into text Linter has finished with rather than into text " +
-					"it is about to rewrite.",
-			);
-		}
-
-		this.showPolicy(containerEl);
+    containerEl.createEl('h3', { text: 'Tree addresses' });
+    containerEl.createEl('p', { cls: 'setting-item-description', text: 'H2–H6 headings receive stable IDs after typing settles. Root IDs are minted only when required, or by “Mint address for this note”. Automatic IDs are uppercase, nondecimal six-hex IDs in 111111..FFFFFF. Existing manual IDs are retained. Use Reserved IDs above to protect additional names; legacy address policies do not affect Hybrid Markdown.' });
 	}
 
 	/** Take the change only if the policy it produces could not mint an illegal id. */

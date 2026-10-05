@@ -189,7 +189,7 @@ Child body
   const enabled = parse(source);
   assert.deepEqual(enabled.frontmatter.properties, { institution: ['must not flatten'] });
   assert.deepEqual(enabled.diagnostics, []);
-  const disabled = parse('---\nforester-mode: false\ncontributors: Alice\nvenue: Private\nauthor: false\n---\n# Root\n');
+  const disabled = parse('---\nforester-mode: false\ncontributors: Alice\nvenue: Private\nauthor: false\n---\n# Root\n', {excludedFolders: ['hybrid']});
   assert.equal(disabled.enabled, false);
   for (const doc of [enabled, disabled]) {
     for (const tree of doc.trees) {

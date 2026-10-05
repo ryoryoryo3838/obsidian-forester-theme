@@ -30,8 +30,10 @@ function readYamlMapping(source: string, allowEmpty = false): Record<string, unk
 function frontmatter(source: string, path: string, diagnostics: HybridDiagnostic[]): { value: Record<string, unknown>; range?: SourceRange } {
   // Check only the prefix before looking for a closing line. Ordinary bodies
   // must not be split/normalized just to ask whether the dialect is active.
-  const opening = source.startsWith('---\n') ? 4 : source.startsWith('---\r\n') ? 5 :
-    source === '---' || source === '---\r' ? source.length : 0;
+  const prefix = source.startsWith('\uFEFF') ? 1 : 0;
+  const opening = source.startsWith('---\n', prefix) ? prefix + 4 : source.startsWith('---\r\n', prefix) ? prefix + 5 :
+    ((source.length === prefix + 3 && source.startsWith('---', prefix)) ||
+      (source.length === prefix + 4 && source.startsWith('---\r', prefix))) ? source.length : 0;
   if (!opening) return { value: {} };
   // LF anchors preserve the existing frontmatter grammar, including CRLF;
   // multiline ^/$ would incorrectly accept a delimiter beside a bare CR.
@@ -50,20 +52,14 @@ function frontmatter(source: string, path: string, diagnostics: HybridDiagnostic
   }
 }
 
-function modeEnabled(path: string, values: Record<string, unknown>, options: HybridOptions, diagnostics: HybridDiagnostic[], legacy: boolean): boolean {
-  if (!has(values, 'forester-mode')) return inFolders(path, options.folders);
-  const mode = values['forester-mode'];
-  if (mode === false) return false;
-  if (mode === true || mode === 'hybrid-v1' || (legacy && mode === 'hybrid-v0')) return true;
-  diagnostics.push({ code: 'invalid-mode', message: 'forester-mode must be hybrid-v1, hybrid-v0, true or false', path, line: 0, severity: 'error' });
-  return false;
-}
-
-/** Cheap adapter gate; hybrid-v0 remains a pure-parser compatibility dialect. */
-export function hybridModeEnabled(path: string, source: string, options: HybridOptions): boolean {
-  const diagnostics: HybridDiagnostic[] = [];
-  const fm = frontmatter(source, path, diagnostics);
-  return diagnostics.length === 0 && modeEnabled(path, fm.value, options, diagnostics, false);
+/** Cheap path-scope gate: source syntax and legacy forester-mode never select the dialect. */
+export function hybridModeEnabled(path: string, _source: string, options: HybridOptions): boolean {
+  if (!/\.md$/i.test(path)) return false;
+  const relativePath = normalizedPath(path);
+  return !(options.excludedFolders ?? []).some(folder => {
+    const prefix = normalizedPath(folder);
+    return folder === '/' || (prefix !== '' && relativePath.startsWith(`${prefix}/`));
+  });
 }
 
 interface SourceLine { text: string; from: number; end: number; line: number; }
@@ -80,7 +76,7 @@ function sourceLineCount(source: string): number {
 
 function sourceLines(source: string): SourceLine[] {
   const lines: SourceLine[] = [];
-  let from = 0;
+  let from = source.startsWith('\uFEFF') ? 1 : 0;
   while (from < source.length) {
     const newline = source.indexOf('\n', from);
     const end = newline < 0 ? source.length : newline + 1;
@@ -447,22 +443,24 @@ function consumeMetadata(tree: HybridTree, source: string, diagnostics: HybridDi
   }
 }
 
-/** Parse the opt-in dialect without changing the source. Disabled notes remain ordinary Markdown. */
+/** Parse default-on Markdown without rewriting source; exclusions remain ordinary Markdown. */
 export function parseHybrid(path: string, source: string, options: HybridOptions): HybridDocument {
   const diagnostics: HybridDiagnostic[] = [];
   const fm = frontmatter(source, path, diagnostics);
-  const enabled = diagnostics.length === 0 && modeEnabled(path, fm.value, options, diagnostics, true);
-  const lines = enabled ? sourceLines(source) : [];
+  const enabled = hybridModeEnabled(path, source, options);
+  // Syntax failure refuses semantic/public parsing, not path activation.
+  const parseable = enabled && diagnostics.length === 0;
+  const lines = parseable ? sourceLines(source) : [];
   const raw: HybridRaw[] = [];
-  const protectedRanges = enabled ? scanProtected(source, lines, fm.range, raw, diagnostics, path) : fm.range ? [fm.range] : [];
+  const protectedRanges = parseable ? scanProtected(source, lines, fm.range, raw, diagnostics, path) : fm.range ? [fm.range] : [];
   for (const region of raw) if (region.error) diagnostics.push({ code: 'unclosed-raw', message: region.error, path, line: lines.find(line => line.from <= region.from && region.from < line.end)?.line, severity: 'error' });
   const root: HybridTree = {
     key: `${path}:root`, path, level: 1, line: 0, headingTitle: null,
-    endLine: enabled ? lines.length : sourceLineCount(source), from: 0, to: source.length, contentFrom: 0,
+    endLine: parseable ? lines.length : sourceLineCount(source), from: 0, to: source.length, contentFrom: 0,
     meta: { title: path.split('/').pop()!.replace(/\.md$/i, ''), titleSource: 'filename', authors: [], dates: [], citationAuthors: [], publish: false, publicTitle: false },
     metadataRanges: [], children: [], number: '',
   };
-  if (enabled) {
+  if (parseable) {
     if (has(fm.value, 'id')) diagnostics.push({ code: 'legacy-id', message: 'Legacy id is not a root identity; use forester-id', path, line: 0, severity: 'warning' });
     if (has(fm.value, 'forester-id')) {
       const id = fm.value['forester-id'];
@@ -470,7 +468,7 @@ export function parseHybrid(path: string, source: string, options: HybridOptions
       else diagnostics.push({ code: 'invalid-id', message: 'forester-id must be a nonempty string of letters, digits or hyphens', path, line: 0, severity: 'error' });
     }
     root.meta.publish = inFolders(path, options.publicFolders);
-    root.contentFrom = fm.range?.to ?? 0;
+    root.contentFrom = fm.range?.to ?? (source.startsWith('\uFEFF') ? 1 : 0);
     root.metadataRanges = fm.range ? [fm.range] : [];
     const h1 = lines.find(line => line.from >= root.contentFrom && /^ {0,3}#[ \t]+/.test(line.text) && !overlaps(protectedRanges, line.from, line.from + line.text.indexOf('#') + 1));
     if (h1) {
@@ -494,7 +492,7 @@ export function parseHybrid(path: string, source: string, options: HybridOptions
     root.meta.titleSource = typeof fm.value.title === 'string' && fm.value.title.trim() ? 'metadata' : fallbackTitleSource;
   }
   const trees = [root];
-  if (enabled) {
+  if (parseable) {
     const stack = [root];
     for (const line of lines) {
       if (line.from < (fm.range?.to ?? 0)) continue;
@@ -667,9 +665,10 @@ function rootIdChange(source: string, id: string): TextChange {
   const newline = source.includes('\r\n') ? '\r\n' : '\n';
   // Six-hex IDs such as 1E0000 are YAML scientific notation unless quoted.
   const scalar = /^[0-9]+E[0-9]+$/.test(id) ? JSON.stringify(id) : id;
-  const opening = /^---\r?\n/.exec(source);
+  const opening = /^\uFEFF?---\r?\n/.exec(source);
   if (opening) return { from: opening[0].length, to: opening[0].length, text: `forester-id: ${scalar}${newline}` };
-  return { from: 0, to: 0, text: `---${newline}forester-id: ${scalar}${newline}---${newline}` };
+  const from = source.startsWith('\uFEFF') ? 1 : 0;
+  return { from, to: from, text: `---${newline}forester-id: ${scalar}${newline}---${newline}` };
 }
 
 /** Pure snapshots only: the caller owns compare-and-swap, writes and target autosave. */
@@ -712,9 +711,9 @@ export function planHybridSave(index: HybridIndex, fromPath: string, draw?: () =
     change(doc, rootIdChange(doc.source, id));
     return id;
   };
-  const ensureTree = (tree: HybridTree, doc: HybridDocument): string => {
+  const ensureTree = (tree: HybridTree, doc: HybridDocument, needsRoot = true): string => {
     if (tree === doc.root) return ensureRoot(doc);
-    ensureRoot(doc);
+    if (needsRoot) ensureRoot(doc);
     const existing = tree.id ?? minted.get(tree.key);
     if (existing) return existing;
     const id = allocate();
@@ -748,7 +747,8 @@ export function planHybridSave(index: HybridIndex, fromPath: string, draw?: () =
   for (const diagnostic of index.diagnostics) if (touched.has(diagnostic.path) && diagnostic.path !== fromPath && diagnostic.severity === 'error') diagnostics.push(diagnostic);
   if (diagnostics.some(d => d.severity === 'error')) return { edits: [], diagnostics };
   try {
-    ensureRoot(document);
+    // Keep root routing on demand; private, unreferenced notes need no YAML identity.
+    if (references.length || document.root.meta.publish) ensureRoot(document);
     // Explicit publication under a private parent requires a stable independent route.
     for (const tree of document.trees) {
       const parent = tree.parentKey ? document.trees.find(candidate => candidate.key === tree.parentKey) : undefined;
@@ -765,6 +765,9 @@ export function planHybridSave(index: HybridIndex, fromPath: string, draw?: () =
         change(document, { from: reference.labelAt, to: reference.labelAt, text: `|${label}` });
       }
     }
+    // Only the settled source receives automatic IDs. Referenced targets above
+    // retain their existing targeted mint behavior, never a vault-wide rewrite.
+    for (const tree of document.trees) if (tree !== document.root) ensureTree(tree, document, false);
   } catch (error) {
     diagnostics.push({ code: 'id-allocation-failed', message: error instanceof Error ? error.message : String(error), path: fromPath, severity: 'error' });
     return { edits: [], diagnostics };

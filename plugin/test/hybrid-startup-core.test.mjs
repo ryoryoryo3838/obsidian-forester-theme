@@ -56,61 +56,68 @@ function observe(action) {
   }
 }
 
-test('shared activation uses adapter mode semantics without parsing the protected body', () => {
+test('shared path activation ignores legacy metadata without parsing any source body or YAML', () => {
   assert.equal(typeof core.hybridModeEnabled, 'function', 'cheap shared activation API must be exported');
-  const opt = options({folders: ['hybrid'], publicFolders: ['/'], reservedIds: ['PUBLIC']});
+  const opt = options({folders: ['hybrid'], excludedFolders: ['Excluded'], publicFolders: ['/'], reservedIds: ['PUBLIC']});
   const body = 'text `code` $x$ \\{ raw }\n'.repeat(8192);
   const cases = [
-    ['hybrid/Note.md', body, true], ['hybridish/Note.md', body, false],
+    ['hybrid/Note.md', body, true], ['hybridish/Note.md', body, true],
     ['Ordinary.md', header('forester-mode: true') + body, true],
     ['Ordinary.md', header('setting: &mode true\nforester-mode: *mode') + body, true],
     ['Ordinary.md', header('forester-mode: >-\n  hybrid-v1') + body, true],
     ['Ordinary.md', header('forester-mode: true\nforester-id: "bad id"') + body, true],
     ['Ordinary.md', header('forester-mode: hybrid-v1', '\r\n', '...') + body, true],
-    ['hybrid/Note.md', header('forester-mode: false') + body, false],
-    ['hybrid/Note.md', header('forester-mode: hybrid-v0') + body, false],
-    ['hybrid/Note.md', header('forester-mode: "false"') + body, false],
-    ['hybrid/Note.md', header('forester-mode: unknown') + body, false],
-    ['hybrid/Note.md', header('forester-mode: true\nauthors: [') + body, false],
-    ['hybrid/Note.md', header('forester-mode: false\nforester-mode: true') + body, false],
-    ['hybrid/Note.md', header('forester-mode: *missing') + body, false],
-    ['hybrid/Note.md', '---\nforester-mode: true\n', false],
-    ['Ordinary.md', header('example: |\n  forester-mode: true') + body, false],
-    ['Ordinary.md', header('# forester-mode: true\nexample: "forester-mode: true"') + body, false],
-    ['Ordinary.md', '```yaml\nforester-mode: true\n```\n' + body, false],
+    ['hybrid/Note.md', header('forester-mode: false') + body, true],
+    ['hybrid/Note.md', header('forester-mode: hybrid-v0') + body, true],
+    ['hybrid/Note.md', header('forester-mode: "false"') + body, true],
+    ['hybrid/Note.md', header('forester-mode: unknown') + body, true],
+    ['hybrid/Note.md', header('forester-mode: true\nauthors: [') + body, true],
+    ['hybrid/Note.md', header('forester-mode: false\nforester-mode: true') + body, true],
+    ['hybrid/Note.md', header('forester-mode: *missing') + body, true],
+    ['hybrid/Note.md', '---\nforester-mode: true\n', true],
+    ['Ordinary.md', header('example: |\n  forester-mode: true') + body, true],
+    ['Ordinary.md', header('# forester-mode: true\nexample: "forester-mode: true"') + body, true],
+    ['Ordinary.md', '```yaml\nforester-mode: true\n```\n' + body, true],
+    ['Excluded/Note.md', body, false],
+    ['Excluded/Note.md', header('forester-mode: true\npublish: true') + body, false],
+    ['Excluded/Note.md', '---\nforester-mode: true\n' + body, false],
+    ['Excludedish/Note.md', body, true],
   ];
   for (const [path, source, expected] of cases) {
     const {value, counts} = observe(() => core.hybridModeEnabled(path, source, opt));
     assert.equal(value, expected, `${path}: ${source.slice(0, 70)}`);
     assert.equal(counts.sourceLines, 0);
     assert.equal(counts.protectedScans, 0);
-    // Tiny closed/no header must not split or normalize the large body.
-    assert.ok(counts.splitChars + counts.replaceChars + counts.sliceChars + counts.indexOfChars + counts.charReads < 16384, JSON.stringify(counts));
+    assert.equal(counts.charReads, 0);
+    // Only tiny path/settings work is permitted, even for malformed/unclosed YAML.
+    assert.ok(counts.splitChars + counts.replaceChars + counts.sliceChars + counts.indexOfChars < 256, JSON.stringify(counts));
+    assert.equal(nativeCore.parseHybrid(path, source, opt).enabled, expected);
   }
   const huge = 'ordinary text `code` $x$ \\ '.repeat(262144);
-  const hugeGate = observe(() => core.hybridModeEnabled('Ordinary.md', huge, options()));
-  assert.equal(hugeGate.value, false);
-  assert.equal(hugeGate.counts.sourceLines + hugeGate.counts.protectedScans + hugeGate.counts.charReads + hugeGate.counts.indexOfChars + hugeGate.counts.sliceChars, 0);
-  assert.equal(core.hybridModeEnabled('Elsewhere.md', body, options({folders: ['/']})), true);
-  assert.equal(nativeCore.parseHybrid('Old.md', header('forester-mode: hybrid-v0') + '## Legacy', options()).enabled, true,
-    'pure parser retains legacy hybrid-v0 compatibility');
+  for (const expected of [false, true]) {
+    const hugeGate = observe(() => core.hybridModeEnabled('Ordinary.md', huge, options({excludedFolders: expected ? [] : ['/']})));
+    assert.equal(hugeGate.value, expected);
+    assert.equal(hugeGate.counts.sourceLines + hugeGate.counts.protectedScans + hugeGate.counts.charReads, 0);
+    assert.ok(hugeGate.counts.splitChars + hugeGate.counts.replaceChars + hugeGate.counts.sliceChars + hugeGate.counts.indexOfChars < 128);
+  }
 });
 
-test('disabled documents skip source lines and protected scans but keep collisions and YAML errors', () => {
-  const opt = options({folders: ['hybrid'], publicFolders: ['hybrid'], reservedIds: ['C0FFEE']});
+test('excluded and syntax-invalid documents skip body scans but retain collisions and YAML save/public refusals', () => {
+  const opt = options({folders: ['hybrid'], excludedFolders: ['Excluded'], publicFolders: ['hybrid'], reservedIds: ['C0FFEE']});
   const body = 'text `code` $x$ \\{ raw }\n'.repeat(4096);
   const sources = [
-    ['Ordinary.md', body],
-    ['hybrid/Optout.md', header('forester-mode: false\naliases: [PUBLIC]') + body],
-    ['hybrid/Unknown.md', header('forester-mode: unknown') + body],
-    ['hybrid/Malformed.md', header('forester-mode: true\nauthors: [') + body],
-    ['hybrid/Unclosed.md', '---\nforester-mode: true\n' + body],
+    ['Excluded/Ordinary.md', body, false],
+    ['Excluded/Optout.md', header('forester-mode: false\naliases: [PUBLIC]') + body, false],
+    ['Excluded/Unknown.md', header('forester-mode: unknown') + body, false],
+    ['hybrid/Malformed.md', header('forester-mode: true\nauthors: [') + body, true],
+    ['hybrid/Unclosed.md', '---\nforester-mode: true\n' + body, true],
   ];
-  const documents = sources.map(([path, source]) => {
+  const documents = sources.map(([path, source, enabled]) => {
     const {value: document, counts} = observe(() => core.parseHybrid(path, source, opt));
-    assert.equal(counts.protectedScans, 0, `${path}: disabled body must not be scanned`);
-    assert.equal(counts.sourceLines, 0, `${path}: disabled body must not build source lines`);
-    assert.equal(document.enabled, false);
+    assert.equal(counts.protectedScans, 0, `${path}: excluded/invalid body must not be scanned`);
+    assert.equal(counts.sourceLines, 0, `${path}: excluded/invalid body must not build source lines`);
+    assert.equal(document.enabled, enabled);
+    assert.equal(core.hybridModeEnabled(path, source, opt), enabled);
     assert.equal(document.source, source);
     assert.equal(document.root.to, source.length);
     assert.equal(document.root.endLine, source.split('\n').length - Number(source.endsWith('\n')));
@@ -124,17 +131,21 @@ test('disabled documents skip source lines and protected scans but keep collisio
   const namedCollision = core.parseHybrid('PUBLIC.md', 'ordinary body', opt);
   const index = core.indexHybrid([...documents, namedCollision, publicDocument]);
   assert.equal(index.documents.size, 7);
-  assert.ok(index.diagnostics.some(d => d.path === 'hybrid/Optout.md' && d.code === 'alias-id-collision'));
+  assert.ok(index.diagnostics.some(d => d.path === 'Excluded/Optout.md' && d.code === 'alias-id-collision'));
   assert.ok(index.diagnostics.some(d => d.path === 'PUBLIC.md' && d.code === 'file-id-collision'));
-  assert.ok(index.diagnostics.some(d => d.path === 'hybrid/Unknown.md' && d.code === 'invalid-mode'));
+  assert.ok(!index.diagnostics.some(d => d.code === 'invalid-mode'));
+  assert.equal(documents[2].frontmatter['forester-mode'], 'unknown');
   for (const path of ['hybrid/Malformed.md', 'hybrid/Unclosed.md']) {
     assert.ok(index.diagnostics.some(d => d.path === path && d.code === 'invalid-frontmatter' && d.severity === 'error'));
     assert.ok(core.planHybridSave(index, path).diagnostics.some(d => d.code === 'invalid-frontmatter'),
-      'disabled malformed input must retain its source-error refusal on save');
+      'malformed input must retain its source-error refusal independently of activation');
   }
+  const excludedError = core.parseHybrid('Excluded/Malformed.md', header('publish: true\nauthors: [') + body, opt);
+  assert.ok(excludedError.diagnostics.some(d => d.code === 'invalid-frontmatter'));
+  assert.deepEqual(core.planHybridSave(core.indexHybrid([excludedError]), excludedError.path).edits, []);
   assert.equal(core.resolveHybrid(index, 'PUBLIC', publicDocument.path).status, 'ambiguous');
   assert.deepEqual(core.planHybridSave(index, documents[1].path).edits, []);
-  assert.deepEqual(projectPublic(index).trees, [], 'ordinary malformed YAML must still block public projection');
+  assert.deepEqual(projectPublic(index).trees, [], 'malformed YAML must still block public projection');
   assert.equal(core.parseHybrid('Empty.md', '', opt).root.endLine, 0);
 });
 
@@ -258,7 +269,7 @@ test('large valid and unclosed fixtures finish in a memory-capped isolated proce
     for (let length = 1; runs.length < size; length++) runs += '\u0060'.repeat(length) + ' x ';
     bodies.push(runs);
     for (const source of bodies) for (const enabled of [false, true]) {
-      const options = {folders: enabled ? ['/'] : [], publicFolders: [], reservedIds: []};
+      const options = {folders: [], excludedFolders: enabled ? [] : ['/'], publicFolders: [], reservedIds: []};
       assert.equal(hybridModeEnabled('Fixture.md', source, options), enabled);
       const document = parseHybrid('Fixture.md', source, options);
       assert.equal(document.enabled, enabled);

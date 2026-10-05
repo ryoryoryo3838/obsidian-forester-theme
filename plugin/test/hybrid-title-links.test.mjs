@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {parseHybrid,indexHybrid,planHybridSave} from './build/hybrid-core.mjs';
-const opts={folders:['hybrid'],publicFolders:[],reservedIds:[]};
+const opts={folders:['hybrid'],excludedFolders:['ordinary'],publicFolders:[],reservedIds:[]};
 const parse=(path,source)=>parseHybrid(path,source,opts);
 const source=(body)=>`---\nforester-id: SOURCE\n---\n${body}`;
 const after=(plan,path,before)=>plan.edits.find(e=>e.path===path)?.after??before;

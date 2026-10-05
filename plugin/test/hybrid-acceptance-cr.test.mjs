@@ -101,7 +101,9 @@ for (const state of ['public', 'private', 'disabled']) {
   ]) {
     test(`preflight includes ${state} source even with ${referenceName}`, () => {
       const visible = parseHybrid('Public.md', header + reference, options);
-      const target = parseHybrid(privatePath, targetSource(state), options);
+      const target = parseHybrid(privatePath, targetSource(state), {
+        ...options, excludedFolders: state === 'disabled' ? ['ACCEPTANCE-PRIVATE-PATH'] : [],
+      });
       assert.equal(target.enabled, state !== 'disabled');
       assert.deepEqual(target.diagnostics, []);
       assertBlocked(projectDocuments([visible, target]));

@@ -1,3 +1,4 @@
+import { treeOccurrence, embedOccurrence, syntaxReady } from './hybrid-controller-helpers';
 import type { HybridDocument, HybridMeta, HybridResolution, HybridTree, SourceRange } from './hybrid-types';
 export interface EmbedFlags { target: string; heading: boolean; toc: boolean; error?: string; }
 export function parseEmbedLine(line: string): EmbedFlags | null {
@@ -36,10 +37,10 @@ export function foresterTokens(code:string):ForesterToken[] {
   if(from<code.length)tokens.push({kind:'text',text:code.slice(from)});
   return tokens;
 }
-export interface OutlineEntry { title:string; number:string; target:string; children:OutlineEntry[]; sourceKey?:string; }
+export interface OutlineEntry { title:string; number:string; target:string; children:OutlineEntry[]; sourceKey?:string; occurrenceKey?:string; }
 /** Bounded occurrence outline. `t` excludes that occurrence, not the referenced tree elsewhere. */
-export function treeOutline(doc:HybridDocument,resolve:(target:string,path?:string)=>HybridResolution):OutlineEntry[]{
-  if(!doc.enabled)return[];
+export function treeOutline(doc:HybridDocument,resolve:(target:string,path?:string)=>HybridResolution,root=doc.root):OutlineEntry[]{
+  if(!syntaxReady(doc))return[];
   let budget=256;
   const caches=new Map<HybridDocument,Array<{from:number;owner:string;flags:EmbedFlags}>>();
   const embeds=(d:HybridDocument)=>{
@@ -58,7 +59,7 @@ export function treeOutline(doc:HybridDocument,resolve:(target:string,path?:stri
     }
     caches.set(d,list);return list;
   };
-  const walk=(d:HybridDocument,t:HybridTree,prefix:string,trail:Set<string>,depth:number,ownSource:boolean):OutlineEntry[]=>{
+  const walk=(d:HybridDocument,t:HybridTree,prefix:string,trail:Set<string>,depth:number,ownSource:boolean,occurrence:string):OutlineEntry[]=>{
     const events=[...t.children.map(child=>({from:child.from,tree:child})),...embeds(d).filter(e=>e.owner===t.key)].sort((a,b)=>a.from-b.from);
     const out:OutlineEntry[]=[];
     for(let i=0;i<events.length;i++){
@@ -66,16 +67,16 @@ export function treeOutline(doc:HybridDocument,resolve:(target:string,path?:stri
       const e=events[i],number=[prefix,String(i+1)].filter(Boolean).join('.');
       if('tree'in e){
         const child=e.tree;
-        out.push({title:child.meta.title,number,target:`${d.path}#${child.id?'^'+child.id:child.meta.title}`,...(ownSource?{sourceKey:child.key}:{}),children:depth<12?walk(d,child,number,trail,depth+1,ownSource):[]});
+        out.push({title:child.meta.title,number,target:`${d.path}#${child.id?'^'+child.id:child.meta.title}`,...(ownSource?{sourceKey:child.key}:{}),occurrenceKey:treeOccurrence(d,child,t,occurrence),children:depth<12?walk(d,child,number,trail,depth+1,ownSource,treeOccurrence(d,child,t,occurrence)):[]});
       }else if(e.flags.toc){
         const r=resolve(e.flags.target,d.path);if(r.status!=='resolved'||!r.document.enabled)continue;
         const loop=trail.has(r.tree.key)||depth>=12;
-        out.push({title:r.tree.meta.title+(loop?' · 循環参照／深さ制限':''),number,target:e.flags.target,children:loop?[]:walk(r.document,r.tree,number,new Set([...trail,r.tree.key]),depth+1,false)});
+        out.push({title:r.tree.meta.title+(loop?' · 循環参照／深さ制限':''),number,target:e.flags.target,occurrenceKey:embedOccurrence(d,e.from,t,occurrence),children:loop?[]:walk(r.document,r.tree,number,new Set([...trail,r.tree.key]),depth+1,false,embedOccurrence(d,e.from,t,occurrence))});
       }
     }
     return out;
   };
-  return walk(doc,doc.root,'',new Set([doc.root.key]),0,true);
+  return walk(doc,root,'',new Set([root.key]),0,true,treeOccurrence(doc,root));
 }
 export interface DisplayPlan { headings: Array<{at:number;label:string;title:string}>; spans: DisplaySpan[]; }
 /** Find the root's source H1 once, excluding examples/frontmatter; root.from remains document offset 0. */
@@ -90,7 +91,7 @@ export function rootHeadingAt(doc:HybridDocument):number|null {
 }
 export function planDisplay(doc: HybridDocument, selections: SourceRange[], resolve: (target:string,path?:string) => HybridResolution): DisplayPlan {
   const plan: DisplayPlan = {headings:[],spans:[]};
-  if (!doc.enabled) return plan;
+  if (!syntaxReady(doc)) return plan;
   const active = (r:SourceRange) => selections.some(s => s.from <= r.to && s.to >= r.from);
   const protectedAt = (r:SourceRange) => doc.protectedRanges.some(s => r.from < s.to && r.to > s.from);
   const numbers=new Map<string,string>();

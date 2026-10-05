@@ -1,6 +1,12 @@
-/** Shared contract for the opt-in hybrid language, separate from the legacy tree-md mode. */
-export interface HybridOptions { folders: string[]; publicFolders: string[]; reservedIds: string[]; }
-export const DEFAULT_HYBRID: HybridOptions = { folders: [], publicFolders: [], reservedIds: [] };
+/** Shared contract for default-on Markdown Forester, separate from legacy tree-md settings. */
+export interface HybridOptions {
+  /** Retained for persisted settings compatibility; no longer controls activation. */
+  folders: string[];
+  /** Vault-relative folders whose descendants stay ordinary Markdown. */
+  excludedFolders?: string[];
+  publicFolders: string[]; reservedIds: string[];
+}
+export const DEFAULT_HYBRID: HybridOptions = { folders: [], excludedFolders: [], publicFolders: [], reservedIds: [] };
 export interface HybridDiagnostic { code: string; message: string; path: string; line?: number; severity: "error" | "warning"; }
 export interface SourceRange { from: number; to: number; }
 export interface HybridMeta {
@@ -25,7 +31,9 @@ export interface HybridTree {
 }
 export interface HybridRaw extends SourceRange { codeFrom: number; codeTo: number; code: string; error?: string; }
 export interface HybridDocument {
-  path: string; source: string; enabled: boolean; frontmatter: Record<string, unknown>;
+  path: string; source: string;
+  /** Path activation only; syntax errors remain separate, save/public-refusing diagnostics. */
+  enabled: boolean; frontmatter: Record<string, unknown>;
   root: HybridTree; trees: HybridTree[]; protectedRanges: SourceRange[]; raw: HybridRaw[];
   diagnostics: HybridDiagnostic[];
 }

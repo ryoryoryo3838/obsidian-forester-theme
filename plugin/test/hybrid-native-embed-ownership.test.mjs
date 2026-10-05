@@ -26,6 +26,6 @@ test('Reading owns known explicit/bare subtree embeds before native filename/blo
  }finally{h.plugin.unload();}
 });
 test('Reading leaves disabled notes and assets to the native embed pipeline',async()=>{
- const host=optin('# Host\n\n![[Plain]]\n');const h=createHarness({'Host.md':host,'Plain.md':'# Plain\nBody'}),c=new HybridController(h.plugin,h.getter);await c.initialize();
+ const host=optin('# Host\n\n![[Plain]]\n');const h=createHarness({'Host.md':host,'Native/Plain.md':'# Plain\nBody'}, {folders:[],excludedFolders:['Native'],publicFolders:[],reservedIds:[]}),c=new HybridController(h.plugin,h.getter);await c.initialize();
  try{const section=document.createElement('section');section.innerHTML='<p><span class="internal-embed" src="Plain">placeholder</span></p>';const line=host.split('\n').indexOf('![[Plain]]');await h.plugin.postprocessors[0](section,h.context('Host.md',line,line));await drain();assert.equal(section.querySelectorAll('.internal-embed').length,1);assert.equal(section.querySelector('.hybrid-managed-embed'),null);assert.equal(section.querySelector('.hybrid-embed'),null);}finally{h.plugin.unload();}
 });

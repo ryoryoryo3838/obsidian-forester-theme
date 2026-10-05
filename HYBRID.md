@@ -1,11 +1,12 @@
 # Hybrid Markdown implementation
 
-This opt-in mode follows miya's Markdown × Forester design rather than the legacy site's tree-md conventions. The legacy mode is retained; no existing note is bulk-migrated. Implementation and native-app verification are separate.
+This default-on dialect follows miya's Markdown × Forester design rather than the legacy site's tree-md conventions. Legacy modules are retained as compatibility/reference code, not as a fallback for excluded notes. Startup does not bulk-migrate notes; settled editing can add subtree IDs. Implementation and native-app verification are separate.
 
 ## Safety and scope
 
-- New syntax is disabled by default. Configure **Hybrid folders**, or set `forester-mode: true` in a note. `false` opts a note out of an enabled folder.
-- **Public folders** is a separate setting. Publication defaults to private. A folder rule makes newly placed opt-in notes public too: use an intentional publication staging area.
+- All Markdown notes are in scope by default. Configure **Excluded folders** to opt folders and descendants out. Legacy `folders`/`forester-mode` settings are preserved but no longer activate or disable the dialect. `/` in exclusions excludes the entire vault.
+- **Public folders** is a separate setting. Publication defaults to private. A folder rule makes newly placed in-scope notes public too: use an intentional publication staging area.
+- Scope and syntax validity are separate: malformed source can be in scope while diagnostics block rewriting/publication. Excluded source never falls back to legacy formatting or minting.
 - Source repositories containing private notes must themselves be private. A `publish` property cannot hide files already in a public Git repository.
 - Public roots and title-only stubs require an explicit title/header. Filename-derived local fallback titles never enter the projection. Malformed metadata or unclosed block math stops projection; invalid YAML even in an ordinary/disabled input file currently stops the build conservatively.
 - Public lookup uses the same resolver as editing, including aliases, relative paths, nested headings and case-insensitive IDs. Ambiguity is never resolved by insertion order.
@@ -16,7 +17,6 @@ This opt-in mode follows miya's Markdown × Forester design rather than the lega
 
 ```yaml
 ---
-forester-mode: true
 forester-id: ABCDEF
 title: Information concepts
 authors: [person-miya]
@@ -57,7 +57,7 @@ The hybrid parser preserves quoted wikilink values and their subtree inheritance
 - Custom IDs: nonempty `[A-Za-z0-9-]+`, no six-character/hex restriction.
 - Root/subtree IDs share one case-insensitive uniqueness check; source spelling is preserved. File names/aliases colliding with IDs are warnings and ambiguous bare references are not silently chosen.
 - IDs never encode a parent, section order or position.
-- On settled editing, the missing active root is addressed. A heading reference to an enabled target addresses its missing root/heading and becomes a fixed-ID reference. Public visibility islands also receive IDs as needed.
+- On settled editing, every valid H2–H6 subtree without an ID in the active saved document is addressed. The root is addressed only when needed for a reference/public island/manual request. Startup does not rewrite the vault. A heading reference to an enabled target addresses the missing referenced identity and becomes a fixed-ID reference. Public visibility islands also receive IDs as needed.
 - Ordinary links between enabled notes receive the target's semantic title as a saved wikilink label while keeping their original target spelling. Explicit labels (including empty labels), embeds and protected regions are untouched. Delimiters, line breaks and backslashes in generated labels are safely encoded. Previously generated and manual labels are not distinguishable, so later title changes do not automatically overwrite existing labels.
 
 ```markdown
@@ -68,7 +68,7 @@ The hybrid parser preserves quoted wikilink values and their subtree inheritance
 
 The store preflights every before-snapshot and uses compare-and-swap. A conflict skips the pass. A later failure attempts CAS rollback without overwriting concurrent edits; any partial rollback must be reported. No plan modifies disabled documents or code examples. This is not a filesystem-wide transaction or protection against every external sync tool.
 
-Legacy writes also skip a note when its disk source or any open, matching editor opts into hybrid mode, including inactive Markdown leaves and other leaves exposing a file/editor pair. An unreadable matching editor refuses the write rather than granting permission. Frontmatter callbacks recheck ownership before native serialization. Opaque native Canvas internals are not covered by a claim of full Canvas support.
+Excluded notes receive neither hybrid rewrites nor legacy fallback formatting/minting. Save requests still verify raw disk and every matching open editor; unreadable or conflicting snapshots refuse writes. Opaque native Canvas internals are not covered by a claim of full Canvas support.
 
 ## Embeds
 
@@ -80,7 +80,17 @@ Legacy writes also skip a note when its disk source or any open, matching editor
 
 An addressed heading also accepts `[[B4C2D1]]` and `![[B4C2D1]]` without knowing its parent file. The ID index resolves the definition and its entire heading section, including lower-level headings until the next equal/higher-level heading. The file-qualified `![[Note#^B4C2D1]]` uses that same section, not Obsidian's default single-heading block. Different-file-name or alias collisions remain ambiguous rather than silently selecting a target; a file root and its own matching ID are one resolved identity.
 
-Native Obsidian checks on a separate two-note synthetic vault verified these Reading/Live Preview embeds, Reading click and Live Preview Ctrl-click ID navigation, and rejection of a different-file-name collision. This is narrow acceptance of these ID paths, not full native-app/mobile or production-freeze acceptance. Core graph/backlink/completion behaviour remains Obsidian-native; an ID link may still carry native unresolved styling even when Forester can follow it.
+Native Obsidian checks on a separate two-note synthetic vault verified these Reading/Live Preview embeds, Reading click and Live Preview Ctrl-click ID navigation, and rejection of a different-file-name collision. This is narrow acceptance of these ID paths, not full native-app/mobile or production-freeze acceptance. Obsidian's core Graph/Backlinks are still separate from the new Forester tabs; an ID link may carry native unresolved styling even when Forester can follow it.
+
+## Sidebar navigation and relations
+
+Four independent tabs are available through **Open Forester TOC / Backlinks / Related / References**. Nothing auto-opens at registration. A shared subscription coalesces updates; closing/unloading views releases timers and listeners.
+
+- TOC titles focus the current rendered section/placement, including transclusions. Adjacent **■** opens an addressed definition. Page-local focus and definition navigation are distinct, as in native Forester.
+- Backlinks are direct inverse `links-to`; Related is direct outgoing `links-to` minus the Reference taxon.
+- References collect links to Reference across the selected tree and reflexive-transitive containment/transclusion closure. Mere embedding is not a direct backlink or Related edge. Cycles are deduplicated and guarded.
+- Relation items open the source file and, for subtrees, the ID location. Ctrl/Cmd opens a new leaf. TOC clicks and ordinary cursor movement do not automatically switch relationship scope.
+- These views use the Forester tree index, not Obsidian's file-only core Backlinks/Graph. ID/title/filename insertion is provided by the local picker, without Omnisearch or an external search service.
 
 ## Author–year citations
 
@@ -88,7 +98,6 @@ A Reference note has explicit bibliographic fields:
 
 ```yaml
 ---
-forester-mode: true
 forester-id: C1D2E3
 taxon: Reference
 citation-authors: [Bates]
@@ -140,19 +149,21 @@ node dist/project-public.mjs \
   --out /path/outside-vault/public-forest.json
 ```
 
-Configuration (the same three arrays as plugin settings):
+Configuration (the same scope/publication/allocator arrays as plugin settings; the obsolete `folders` array is accepted but ignored):
 
 ```json
-{"folders":["Notes"],"publicFolders":["Notes/Public"],"reservedIds":["ABCDEF"]}
+{"excludedFolders":["Templates","Scratch"],"publicFolders":["Notes/Public"],"reservedIds":["ABCDEF"]}
 ```
 
-No configuration means no enabled/public folders; explicitly opted-in notes still work. Traversal skips hidden directories and symlinks. The command does not mutate source notes, follows no imports, makes no network requests, and returns nonzero without creating an artifact on validation failure. An existing successful output is left untouched on refusal, so it is not evidence that the latest build succeeded. Diagnostics emitted to CI are source-free. Output must be a JSON file outside the source vault, written through a temporary file and atomic rename. Do not publish after a nonzero exit; use a fresh build directory.
+No configuration means all Markdown notes are in scope but no folder is public by default. Traversal skips hidden directories and symlinks. The command does not mutate source notes, follows no imports, makes no network requests, and returns nonzero without creating an artifact on validation failure. An existing successful output is left untouched on refusal, so it is not evidence that the latest build succeeded. Diagnostics emitted to CI are source-free. Output must be a JSON file outside the source vault, written through a temporary file and atomic rename. Do not publish after a nonzero exit; use a fresh build directory.
 
 The JSON is a validated public projection, **not a complete Forester HTML website**. Connecting it to the existing site/CI is a subsequent step. Keep public indexes, URLs and asset copying behind the same projection boundary; hiding private HTML in CSS is not sufficient.
 
 ## Commands and tests
 
-Native `[[`/heading/block selection, `#` tag selection and `##` heading entry remain primary. New commands are **Check hybrid trees** and **Preview public projection**. No mandatory special subtree insertion hotkey, slash conversion or Linter integration is added.
+Native `[[`/heading/block selection, `#` tag selection and `##` heading entry still work. `/subtree` inserts a blank H2, `/transclude` opens a tree picker for embeds, and `/link` opens a picker for links. Candidates match ID, semantic title and filename/path; ambiguous targets are not selected. Protected regions, stale selection/source/file bindings and cancellation refuse insertion. No default hotkeys are added.
+
+Commands include **Check hybrid trees**, **Preview public projection**, **Insert subtree**, **Insert tree embed**, **Insert tree link**, and the existing note/subtree mint commands. The four **Open Forester …** commands open/reuse individual sidebar tabs; views do not auto-open at plugin registration. Linter integration remains separate.
 
 ```sh
 npm test             # legacy and hybrid unit/integration suites

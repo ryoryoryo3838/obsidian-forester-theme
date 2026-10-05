@@ -32,6 +32,7 @@ export class TFile {
 export class MarkdownView {
   constructor(file, source, plugin) {
     this.file = file; this.mode = 'source'; this.previewMode = { rerender: () => this.rerenders++ }; this.rerenders = 0;
+    this.containerEl = document.createElement('div');
     this.editor = new MockEditor(source, this, plugin);
   }
   getMode() { return this.mode; }
@@ -43,7 +44,12 @@ export class Events {
   async emit(name, ...args) { await Promise.all((this.events.get(name) ?? []).map(r => r.callback(...args))); }
 }
 export class Plugin extends Component {
-  constructor(app) { super(); this.app = app; this.extensions = []; this.postprocessors = []; this.codeblocks = new Map(); this.commands = new Map(); this.eventRefs = []; this.load(); }
+  constructor(app) { super(); this.app = app; this.extensions = []; this.postprocessors = []; this.codeblocks = new Map(); this.commands = new Map(); this.eventRefs = []; this.views = new Map(); this.suggesters = []; this.loaded = true; }
+  async loadData() { return null; }
+  async saveData(value) { this.savedData = value; }
+  addSettingTab(tab) { this.settingTab = tab; }
+  registerView(type, create) { this.views.set(type, create); this.register(() => this.views.delete(type)); }
+  registerEditorSuggest(suggest) { this.suggesters.push(suggest); }
   registerEvent(ref) { this.eventRefs.push(ref); this.register(() => ref.owner.offref(ref)); }
   registerEditorExtension(extension) { this.extensions.push(extension); }
   registerMarkdownPostProcessor(fn) { this.postprocessors.push(fn); }
@@ -58,7 +64,13 @@ export class MockEditor {
     this.cm = { state: null, dispatches: [], dispatch: tx => { this.cm.dispatches.push(tx); if (this.cm.state) this.cm.state = this.cm.state.update(tx).state; } };
   }
   getValue() { return this.value; }
-  getCursor(side = 'head') { return this.selections[0][side]; }
+  getCursor(side = 'head') { const s = this.selections[0]; if (side === 'from' || side === 'to') { const ordered = [s.anchor, s.head].sort((a,b) => this.posToOffset(a) - this.posToOffset(b)); return { ...ordered[side === 'from' ? 0 : 1] }; } return s[side]; }
+  getRange(from, to) { return this.value.slice(this.posToOffset(from), this.posToOffset(to)); }
+  setCursor(position) { this.selections = [{ anchor: { ...position }, head: { ...position } }]; }
+  getLine(line) { return this.value.split('\n')[line] ?? ''; }
+  lineCount() { return this.value.split('\n').length; }
+  focus() { this.focused = true; }
+  scrollIntoView(range) { this.scrolled = range; }
   listSelections() { return structuredClone(this.selections); }
   setSelections(s) { this.selections = structuredClone(s); }
   posToOffset(p) { return offset(this.value, p); }
@@ -104,7 +116,12 @@ export function createHarness(entries = {}, options = { folders: [], publicFolde
     return after;
   };
   const workspace = new Events(); workspace.views = []; workspace.active = null; workspace.opens = [];
-  workspace.getLeavesOfType = () => workspace.views.map(view => ({ view }));
+  workspace.getLeavesOfType = type => type === 'markdown' ? workspace.views.filter(v => v instanceof MarkdownView).map(view => ({ view })) : [];
+  workspace.onLayoutReady = fn => { workspace.layoutReady = fn; };
+  workspace.iterateAllLeaves = fn => workspace.views.forEach(view => fn({ view }));
+  workspace.detachLeavesOfType = type => { workspace.detached = type; };
+  workspace.getRightLeaf = () => ({ view: null, setViewState: async state => { workspace.rightState = state; } });
+  workspace.revealLeaf = async leaf => { workspace.revealed = leaf; };
   workspace.getActiveViewOfType = Type => workspace.active instanceof Type ? workspace.active : null;
   workspace.getActiveFile = () => workspace.active?.file ?? null;
   Object.defineProperty(workspace, 'activeEditor', { get: () => workspace.active });
@@ -120,4 +137,23 @@ export function createHarness(entries = {}, options = { folders: [], publicFolde
     }
   };
   return h;
+}
+
+export class EditorSuggest extends Component { constructor(app) { super(); this.app = app; this.context = null; } close() { this.context = null; } }
+export class FuzzySuggestModal extends Modal { setPlaceholder(text) { this.placeholder = text; } }
+export class SuggestModal extends FuzzySuggestModal { selectSuggestion(item, event) { this.close(); return this.onChooseSuggestion(item, event); } }
+export class ItemView extends Component { constructor(leaf) { super(); this.leaf = leaf; this.app = leaf.app; this.containerEl = document.createElement('div'); this.contentEl = document.createElement('div'); this.containerEl.append(this.contentEl); } }
+export class PluginSettingTab { constructor(app, plugin) { this.app = app; this.plugin = plugin; this.containerEl = document.createElement('div'); } }
+export class Setting {
+  constructor(container) { this.container = container; this.el = document.createElement('div'); container.append(this.el); }
+  setName(name) { this.el.setAttribute('data-setting-name', name); return this; }
+  setDesc(desc) { this.el.textContent = desc; return this; }
+  addTextArea(fn) { return this.control(fn); } addText(fn) { return this.control(fn); } addToggle(fn) { return this.control(fn); } addSlider(fn) { return this.control(fn); } addDropdown(fn) { return this.control(fn); }
+  control(fn) { const c = { setValue() { return c; }, setPlaceholder() { return c; }, onChange() { return c; }, setLimits() { return c; }, setDynamicTooltip() { return c; }, addOption() { return c; } }; fn(c); return this; }
+}
+export const Platform = { isMobile: false };
+export const Keymap = { isModEvent: event => event.ctrlKey || event.metaKey };
+export function debounce(fn, delay) { let timer; return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), delay); }; }
+for (const [name, fn] of Object.entries({ addClass(...names) { this.classList.add(...names); }, removeClass(...names) { this.classList.remove(...names); }, toggleClass(name, on) { this.classList.toggle(name, on); }, empty() { this.replaceChildren(); }, createEl(tag, attrs = {}) { const el = document.createElement(tag); if (attrs.text) el.textContent = attrs.text; if (attrs.cls) el.className = attrs.cls; this.append(el); return el; } })) {
+  if (!window.HTMLElement.prototype[name]) window.HTMLElement.prototype[name] = fn;
 }

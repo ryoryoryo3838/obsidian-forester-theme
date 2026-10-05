@@ -295,3 +295,29 @@ body.forester-hide-slugs a.slug {
 	display: inline;
 	font-style: normal;
 }
+
+/* ── Individual hybrid sidebar tabs ─────────────────────────────────────────
+   Keep native details disclosure/keyboard behaviour; scope everything to these views. */
+.hybrid-sidebar { overflow-y: auto; padding: var(--size-4-3, 12px); color: var(--text-normal); font-size: var(--font-ui-small, 13px); }
+.hybrid-sidebar h2 { margin: 0 0 .6em; font-size: var(--font-ui-medium, 14px); }
+.hybrid-sidebar .hybrid-sidebar-context { margin: 0 0 .8em; color: var(--text-muted); overflow-wrap: anywhere; }
+.hybrid-sidebar .hybrid-sidebar-toc,
+.hybrid-sidebar .hybrid-sidebar-relations { list-style: none; margin: 0; padding: 0; }
+.hybrid-sidebar .hybrid-sidebar-toc .hybrid-sidebar-toc { padding-inline-start: var(--size-4-3, 12px); }
+.hybrid-sidebar .hybrid-sidebar-row { min-width: 0; line-height: 1.6; }
+.hybrid-sidebar .hybrid-sidebar-relation-entry { margin-block: 0 .7em; }
+.hybrid-sidebar :is(.hybrid-sidebar-heading, .hybrid-sidebar-route) {
+	display: inline; height: auto; margin: 0; padding: 0; border: 0; box-shadow: none;
+	border-radius: var(--radius-s, 4px); background: transparent; color: var(--text-normal);
+	font: inherit; line-height: inherit; text-align: start; cursor: pointer;
+}
+.hybrid-sidebar .hybrid-sidebar-heading { white-space: normal; overflow-wrap: anywhere; }
+.hybrid-sidebar .hybrid-sidebar-route { margin-inline-start: .4em; color: var(--text-muted); font-size: .85em; }
+.hybrid-sidebar :is(.hybrid-sidebar-heading, .hybrid-sidebar-route):hover:not([disabled]) { text-decoration: underline; }
+.hybrid-sidebar :is(.hybrid-sidebar-heading, .hybrid-sidebar-route):focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
+.hybrid-sidebar .hybrid-sidebar-heading[disabled] { color: var(--text-faint); cursor: default; }
+.hybrid-sidebar :is(.hybrid-sidebar-number, .hybrid-sidebar-taxon) { color: var(--text-normal); margin-inline-end: .4em; }
+.hybrid-sidebar .hybrid-sidebar-id { color: var(--text-muted); font: .85em var(--font-monospace, monospace); margin-inline-start: .4em; }
+.hybrid-sidebar :is(.hybrid-sidebar-metadata, .hybrid-sidebar-bibliography, .hybrid-sidebar-unavailable) { display: block; color: var(--text-muted); font-size: .9em; overflow-wrap: anywhere; }
+.hybrid-sidebar .hybrid-sidebar-empty { color: var(--text-muted); }
+.hybrid-sidebar .hybrid-sidebar-error { color: var(--text-error); overflow-wrap: anywhere; }
