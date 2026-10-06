@@ -25,7 +25,8 @@ if (existsSync(entry)) {
 }
 const specs = [
   ['forester-toc', 'Forester TOC', 'list-tree'],
-  ['forester-backlinks', 'Forester Backlinks', 'links'],
+  // Native Obsidian resolves Lucide `link`; the plural `links` renders no SVG.
+  ['forester-backlinks', 'Forester Backlinks', 'link'],
   ['forester-related', 'Forester Related', 'network'],
   ['forester-references', 'Forester References', 'book-open']
 ];

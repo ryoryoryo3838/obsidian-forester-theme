@@ -24,7 +24,7 @@ export interface HybridSidebarHost {
 
 const VIEWS = [
   { type: 'forester-toc', title: 'Forester TOC', icon: 'list-tree' },
-  { type: 'forester-backlinks', title: 'Forester Backlinks', icon: 'links' },
+  { type: 'forester-backlinks', title: 'Forester Backlinks', icon: 'link' },
   { type: 'forester-related', title: 'Forester Related', icon: 'network' },
   { type: 'forester-references', title: 'Forester References', icon: 'book-open' },
 ] as const;
