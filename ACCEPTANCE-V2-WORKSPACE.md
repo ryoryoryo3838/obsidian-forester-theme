@@ -6,7 +6,7 @@ This records real execution for the default-on scope/input/sidebar replacement, 
 
 | Check | Result |
 |---|---|
-| Hybrid/parser/public/controller/input/sidebar regressions | 624 passed, 0 failed |
+| Hybrid/parser/public/controller/input/sidebar regressions | 625 passed, 0 failed |
 | Real controller/workspace integration through the public Obsidian API mock boundary | 24 passed, 0 failed |
 | Chromium computed-style/theme tests | 15 passed, 0 failed |
 | Retained legacy pure-module checks | 57 successful checks |
@@ -29,6 +29,14 @@ A new synthetic-only vault/config/profile was launched with host/home filesystem
 Obsidian then required its initial **trust vault / enable plugins** confirmation. The permission clarification received no answer before timing out. No confirmation was bypassed: the plugin was not loaded, and native command, automatic-ID, picker, sidebar and occurrence-navigation acceptance could not run. A renderer readiness timeout at this gate is not evidence of a Forester freeze.
 
 The passing controller/DOM tests are not substitutes for this native acceptance. Previously accepted native ID paths belong to the earlier build and do not prove this replacement's new features. Mobile, native Canvas internals, a full production-equivalent plugin/workspace test and the original sustained-freeze event source remain unverified.
+
+## Native sidebar constructor correction
+
+A subsequent live Obsidian report showed **“the plugin that created this pane is no longer active”** even though Forester and all four view factories were registered. Console capture during real view creation identified a `getViewType` exception: Obsidian's base View constructor dispatches this virtual getter before the derived constructor's `spec` parameter property exists.
+
+The factories now create closure-bound subclasses whose type/title/icon are valid during `super(leaf)`. A realistic base-constructor mock reproduced the same exception before the fix; all four identities pass afterward. Full regressions, production build and independent review also pass.
+
+The existing Backlinks pane was restored in the live app using the exact fixed sidebar module with native ItemView inheritance and the actual controller, replacing only that pane's factory **in memory**. Readback confirmed a real `data-forester-sidebar` and no removed-plugin message. Installed plugin files, other panes and note content were not changed by this temporary repair. This demonstrates the narrow constructor/Backlinks path; it does not establish full plugin reload/restart, all four native tab interactions, Mobile or production-freeze acceptance. Re-download the plugin assets to persist the source correction across restart.
 
 ## Scope and risks
 

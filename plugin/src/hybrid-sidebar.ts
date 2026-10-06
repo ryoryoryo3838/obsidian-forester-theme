@@ -267,7 +267,15 @@ export function registerHybridSidebar(plugin: Plugin, host: HybridSidebarHost): 
     for (const [leaf, type] of openingLeaves) detachOpening(leaf, type);
   });
   for (const spec of VIEWS) {
-    plugin.registerView(spec.type, leaf => new HybridSidebarView(leaf, spec, updates));
+    // Obsidian's base View constructor calls these virtual methods during
+    // super(leaf), before HybridSidebarView's parameter properties exist.
+    // Closure-bound identities are available throughout native construction.
+    class SidebarView extends HybridSidebarView {
+      getViewType(): string { return spec.type; }
+      getDisplayText(): string { return spec.title; }
+      getIcon(): string { return spec.icon; }
+    }
+    plugin.registerView(spec.type, leaf => new SidebarView(leaf, spec, updates));
     let pending: Promise<void> | null = null;
     const open = async (): Promise<void> => {
       if (!alive) return;

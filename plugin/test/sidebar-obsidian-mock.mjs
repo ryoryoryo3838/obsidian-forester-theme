@@ -18,6 +18,11 @@ export class ItemView {
   constructor(leaf) {
     this.leaf = leaf;
     this.app = leaf.workspace.app;
+    // Native Obsidian's View constructor dispatches identity getters before
+    // derived constructor parameter properties have been initialized.
+    this.constructorIdentity = {
+      type: this.getViewType?.(), title: this.getDisplayText?.(), icon: this.getIcon?.(),
+    };
     this.containerEl = document.createElement('div');
     this.contentEl = this.containerEl.createEl('div', { cls: 'view-content' });
     document.body.append(this.containerEl);

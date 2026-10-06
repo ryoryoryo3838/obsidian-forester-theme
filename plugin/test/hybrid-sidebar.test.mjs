@@ -84,6 +84,17 @@ const current = viewed => ({ document: {
 }, tree: viewed });
 
 // The native unavailable runtime alone is mocked; every assertion uses the real module.
+test('native base constructor can query each sidebar identity before derived fields initialize', async t => {
+  const h = await setup(t);
+  for (const [type, title, icon] of specs) {
+    const leaf = h.workspace.getRightLeaf(false);
+    let view;
+    assert.doesNotThrow(() => { view = h.plugin.views.get(type)(leaf); }, `${type} must not become a missing-plugin pane`);
+    leaf.view = view;
+    assert.deepEqual(view.constructorIdentity, {type, title, icon});
+  }
+});
+
 test('four individual public ItemViews open only by command and reuse existing leaves per type', async t => {
   const h = await setup(t);
   assert.deepEqual([...h.plugin.views.keys()], specs.map(s => s[0]));
