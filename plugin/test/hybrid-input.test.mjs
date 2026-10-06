@@ -486,3 +486,68 @@ test('host insertion rejection is reported without an unhandled promise or an in
   assert.equal(h.workspace.activeEditor.editor.value, entries['Source.md']);
   assert.ok(mock.notices.some(message => message.includes('Synthetic host write rejection')));
 });
+
+test('typing [[ suggests trees and inserts tree links (![[ inserts embeds), swallowing the auto-paired ]]', async () => {
+  const alpha = optin('# Source heading\n\n## Child ^AbC-123\n%% title: Semantic child %%\nBody', 'forester-id: ROOT-id\ntitle: Root semantic\n');
+  for (const [typed, embed, paired] of [['[[child', false, false], ['[[child', false, true], ['![[child', true, true]]) {
+    const before = optin(`Intro ${typed}${paired ? ']]' : ''} tail`);
+    const h = harness({ 'Source.md': before, 'Books/Alpha.md': alpha });
+    h.register();
+    const links = h.plugin.suggests[1];
+    assert.ok(links instanceof mock.EditorSuggest, 'the [[ suggester is a public native EditorSuggest');
+    const { editor, file } = h.workspace.activeEditor;
+    const start = before.indexOf(typed), caret = start + typed.length;
+    editor.setCursor(editor.offsetToPos(caret));
+    const context = links.onTrigger(editor.getCursor(), editor, file);
+    assert.ok(context, `${typed} triggers`);
+    assert.equal(context.query, 'child');
+    assert.deepEqual(context.start, editor.offsetToPos(start));
+    assert.deepEqual(context.end, editor.offsetToPos(caret + (paired ? 2 : 0)), 'auto-paired ]] is part of the replacement');
+    links.context = { ...context, file, editor };
+    const rows = links.getSuggestions(links.context);
+    assert.deepEqual(rows.map(row => row.tree.id), ['AbC-123']);
+    const el = mock.document.createElement('div'); links.renderSuggestion(rows[0], el);
+    assert.ok(el.textContent.includes('Semantic child') && el.textContent.includes('Books/Alpha.md'));
+    links.selectSuggestion(rows[0], {}); await settle();
+    assert.equal(h.calls.length, 1);
+    const [calledEditor, calledFile, tree, calledEmbed, replacement] = h.calls[0];
+    assert.equal(calledEditor, editor); assert.equal(calledFile, file);
+    assert.equal(tree.id, 'AbC-123'); assert.equal(calledEmbed, embed);
+    assert.deepEqual(replacement, { from: context.start, to: context.end, before });
+    assert.equal(editor.getValue(), before, 'only the host writes the link');
+    assert.equal(links.context, null, 'popover closes on selection');
+  }
+});
+
+test('[[ leaves Obsidian file suggestions in place outside editable tree prose, for |, # and ^, and when turned off', () => {
+  const declines = (body, caretAfter, entries, active = 'Source.md', host = {}) => {
+    const h = harness(entries ?? { 'Source.md': optin(body) }, active);
+    Object.assign(h.host, host); h.register();
+    const { editor, file } = h.workspace.activeEditor;
+    editor.setCursor(editor.offsetToPos(editor.value.indexOf(caretAfter) + caretAfter.length));
+    return h.plugin.suggests[1].onTrigger(editor.getCursor(), editor, file) === null;
+  };
+  assert.ok(!declines('See [[al', '[[al'), 'baseline triggers');
+  for (const [body, caret] of [['See [[al|Alias', '|Alias'], ['See [[al#Head', '#Head'], ['See [[al^blk', '^blk'], ['See [al', '[al'], ['`code [[al`', '[[al'], ['```md\n[[al\n```', '[[al'], ['%% [[al %%', '[[al']])
+    assert.ok(declines(body, caret), `declines: ${body}`);
+  assert.ok(declines('', '[[al', { 'Disabled/Source.md': 'See [[al' }, 'Disabled/Source.md'), 'excluded folder keeps native suggestions');
+  assert.ok(declines('See [[al', '[[al', undefined, 'Source.md', { linkSuggest: () => false }), 'setting off keeps native suggestions');
+  const h = harness({ 'Source.md': optin('See [[al') }); h.register();
+  const { editor, file } = h.workspace.activeEditor;
+  const at = editor.value.indexOf('[[al') + 4;
+  editor.setSelection(editor.offsetToPos(at - 2), editor.offsetToPos(at));
+  assert.equal(h.plugin.suggests[1].onTrigger(editor.offsetToPos(at), editor, file), null, 'a selection is not replaced');
+});
+
+test('the [[ suggester is moved ahead of the built-in suggesters when Obsidian exposes the list', () => {
+  const h = harness();
+  const builtIn = { name: 'native link suggest' };
+  h.workspace.editorSuggest = { suggests: [builtIn] };
+  const register = h.plugin.registerEditorSuggest.bind(h.plugin);
+  h.plugin.registerEditorSuggest = suggest => { register(suggest); h.workspace.editorSuggest.suggests.push(suggest); };
+  h.register();
+  const [slash, links] = h.plugin.suggests;
+  assert.deepEqual(h.workspace.editorSuggest.suggests, [links, builtIn, slash]);
+  const bare = harness(); bare.register();
+  assert.equal(bare.plugin.suggests.length, 2, 'without the private list, registration still succeeds');
+});

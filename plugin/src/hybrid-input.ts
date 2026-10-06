@@ -11,6 +11,8 @@ export type HybridInputHost = {
     to: { line: number; ch: number };
     before: string;
   }): Promise<void>;
+  /** Whether typing `[[` offers trees instead of Obsidian's file suggestions (default on). */
+  linkSuggest?(): boolean;
 };
 
 /** Search only the existing index; never read or rescan the vault on input. */
@@ -236,12 +238,78 @@ class HybridSlashSuggest extends EditorSuggest<SlashChoice> {
   }
 }
 
+interface LinkChoice { tree: HybridTree; source: string; embed: boolean; capture: InputCapture; }
+// `[[query` or `![[query` up to the caret. `|`, `#` and `^` hand the link back to Obsidian
+// (alias, heading or block references are written by hand).
+const wikilinkTrigger = /(!?)\[\[([^[\]|#^\r\n]*)$/;
+
+/** `[[` in an enabled document suggests trees and inserts the same link as "Insert tree link". */
+class HybridWikilinkSuggest extends EditorSuggest<LinkChoice> {
+  constructor(private support: InputSupport) { super(support.plugin.app); }
+  onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
+    if (!file || this.support.host.linkSuggest?.() === false) return null;
+    if (!samePosition(editor.getCursor('from'), cursor) || !samePosition(editor.getCursor('to'), cursor)) return null;
+    const line = editor.getLine(cursor.line);
+    const match = wikilinkTrigger.exec(line.slice(0, cursor.ch));
+    if (!match) return null;
+    const start = { line: cursor.line, ch: cursor.ch - match[0].length };
+    // Swallow the `]]` that Obsidian auto-pairs after `[[`, so the link is not closed twice.
+    const end = { line: cursor.line, ch: cursor.ch + (line.startsWith(']]', cursor.ch) ? 2 : 0) };
+    if (!this.support.capture(editor, file, start, end)) return null;
+    return { start, end, query: match[2] };
+  }
+  getSuggestions(context: EditorSuggestContext): LinkChoice[] {
+    const { editor, file, start, end, query } = context;
+    const text = editor.getRange(start, end);
+    const match = /^(!?)\[\[/.exec(text);
+    if (!match || !text.slice(match[0].length).startsWith(query)) return [];
+    const capture = this.support.capture(editor, file, start, end);
+    if (!capture) return [];
+    const index = this.support.host.index();
+    return filterHybridTrees(index, query)
+      .filter(tree => this.support.resolveCandidate(index, tree, capture.path) !== null)
+      .map(tree => ({ tree, source: index.documents.get(tree.path)!.source, embed: match[1] === '!', capture }));
+  }
+  renderSuggestion(choice: LinkChoice, el: HTMLElement): void {
+    const { tree } = choice;
+    el.textContent = `${tree.meta.title || '(untitled)'} · ${tree.id ?? 'ID on insertion'} · ${tree.path}`;
+  }
+  selectSuggestion(choice: LinkChoice): void {
+    if (!this.context || !this.support.valid(choice.capture)) return;
+    this.close();
+    const index = this.support.host.index(), document = index.documents.get(choice.tree.path);
+    if (!document?.enabled || document.source !== choice.source) return;
+    const tree = document.trees.find(candidate => candidate.key === choice.tree.key && candidate.id === choice.tree.id);
+    if (!tree || !this.support.resolveCandidate(index, tree, choice.capture.path)) return;
+    const { editor, file, replacement } = choice.capture;
+    this.support.host.insertTarget(editor, file, tree, choice.embed, replacement).catch(error => {
+      new Notice(`Tree insertion failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
+}
+
+/**
+ * Obsidian checks editor suggesters in order and its own `[[` file suggester comes first, so a
+ * plugin suggester registered normally never sees `[[`. Move ours to the front of the private
+ * list; where that list is missing, nothing changes and Obsidian's suggester keeps `[[`.
+ */
+function preferSuggest(plugin: Plugin, suggest: EditorSuggest<unknown>): void {
+  const list = (plugin.app.workspace as unknown as { editorSuggest?: { suggests?: unknown[] } }).editorSuggest?.suggests;
+  if (!Array.isArray(list)) return;
+  const at = list.indexOf(suggest);
+  if (at > 0) { list.splice(at, 1); list.unshift(suggest); }
+}
+
 /** Register input support only; importing this module never changes editors. */
 export function registerHybridInput(plugin: Plugin, host: HybridInputHost): void {
   const support = new InputSupport(plugin, host);
   const suggest = new HybridSlashSuggest(support);
   plugin.registerEditorSuggest(suggest);
   plugin.register(() => suggest.close());
+  const links = new HybridWikilinkSuggest(support);
+  plugin.registerEditorSuggest(links);
+  preferSuggest(plugin, links as EditorSuggest<unknown>);
+  plugin.register(() => links.close());
   for (const [command, id, name] of [
     ['subtree', 'insert-subtree', 'Insert subtree'],
     ['transclude', 'insert-tree-embed', 'Insert tree embed'],

@@ -88,7 +88,7 @@ export class HybridController {
   private readingEmbeds = new Map<HTMLElement, { section: HTMLElement; child: MarkdownRenderChild; wrapper: HTMLElement; path: string; source: string; from: number; signature: string }>();
   private readingLinks = new WeakMap<HTMLElement, { child: MarkdownRenderChild; anchors: HTMLElement[]; signature: string }>();
 
-  constructor(private plugin: Plugin, private options: () => HybridOptions) {}
+  constructor(private plugin: Plugin, private options: () => HybridOptions, private linkSuggest: () => boolean = () => true) {}
 
   private configuration(): { options: HybridOptions; key: string } {
     const value = this.options();
@@ -226,7 +226,7 @@ export class HybridController {
       pre.append(code); el.append(pre);
     });
     this.markdownView();
-    registerHybridInput(this.plugin, { index: () => this.currentIndex(), resolve: (target, path) => resolveHybrid(this.currentIndex(), target, path), insertTarget: (editor, file, tree, embed, replacement) => this.insertTarget(editor, file, tree, embed, replacement) });
+    registerHybridInput(this.plugin, { index: () => this.currentIndex(), resolve: (target, path) => resolveHybrid(this.currentIndex(), target, path), insertTarget: (editor, file, tree, embed, replacement) => this.insertTarget(editor, file, tree, embed, replacement), linkSuggest: () => this.linkSuggest() });
     registerHybridSidebar(this.plugin, { current: () => this.current(), outline: (document, tree) => this.outline(document, tree), relations: tree => this.relations(tree), openTree: (tree, newLeaf) => this.openTree(tree, newLeaf), focusOccurrence: entry => this.focusOccurrence(entry), subscribe: update => this.subscribe(update) });
     this.plugin.addCommand({ id: 'check-hybrid-trees', name: 'Check hybrid trees', callback: () => this.checkTrees() });
     this.plugin.addCommand({ id: 'preview-public-projection', name: 'Preview public projection (local only)', callback: () => this.previewPublic() });
