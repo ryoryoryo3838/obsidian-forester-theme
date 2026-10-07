@@ -573,6 +573,9 @@ export class HybridController {
     };
     if (!guard() || editor.getValue() !== before || from < 0 || to < from || to > before.length) return;
     await this.serial(async () => {
+      // An inline `[[` choice can be confirmed before Obsidian autosaves the text just typed, and the
+      // commit below compares disk with the editor. Write the author's unsaved text first.
+      await this.flushEditor(path, editor);
       await this.refresh();
       if (!guard() || editor.getValue() !== before || !this.isEnabled(path, before)) return;
       const index = this.currentIndex(), document = index.documents.get(path), target = index.documents.get(tree.path);
@@ -614,6 +617,17 @@ export class HybridController {
       edits.set(path, { path, before, after: sourceEdit?.after ?? prospective });
       await this.commitPlan({ edits: [...edits.values()], diagnostics: plan.diagnostics }, path, editor, guard, [target]);
     });
+  }
+
+  /** Save the Markdown view that owns this editor, so its disk copy equals what the author sees. */
+  private async flushEditor(path: string, editor: Editor): Promise<void> {
+    for (const leaf of this.plugin.app.workspace.getLeavesOfType('markdown')) {
+      const view = leaf.view;
+      if (view instanceof MarkdownView && view.file?.path === path && view.editor === editor && typeof view.save === 'function') {
+        await this.io(path, () => view.save());
+        return;
+      }
+    }
   }
 
   private replaceEditor(editor: Editor, before: string, after: string): void {

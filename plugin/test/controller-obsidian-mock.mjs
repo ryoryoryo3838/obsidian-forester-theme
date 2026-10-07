@@ -36,6 +36,14 @@ export class MarkdownView {
     this.editor = new MockEditor(source, this, plugin);
   }
   getMode() { return this.mode; }
+  // Native TextFileView.save(): write the editor text to the vault.
+  async save() {
+    const vault = this.editor.plugin.app.vault;
+    vault.saves = (vault.saves ?? 0) + 1;
+    if (vault.data.get(this.file.path) === this.editor.getValue()) return;
+    vault.data.set(this.file.path, this.editor.getValue());
+    await vault.emit('modify', this.file);
+  }
 }
 export class Events {
   constructor() { this.events = new Map(); }

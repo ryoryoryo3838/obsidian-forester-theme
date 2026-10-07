@@ -162,3 +162,19 @@ test('manual commands refuse unbound files and protected example headings have n
   assert.equal(s.h.vault.data.get('Page.md'), source); assert.deepEqual(s.h.vault.processes, []);
   assert.ok(notices.some(message => message.includes('no eligible subtree'))); s.close();
 });
+
+test('an inline [[ choice confirmed before autosave saves the typed text first and inserts the link', async () => {
+  const saved = '# Page\n\nSee ', typed = saved + '[[par]]';
+  const s = await start({ 'Page.md': saved, 'Book.md': '# Book\n\n## Part ^ABC123\nBody' });
+  const author = s.h.open('Page.md');
+  author.editor.value = typed;   // typed text Obsidian has not autosaved yet
+  assert.equal(s.h.vault.data.get('Page.md'), saved);
+  const tree = s.c.currentIndex().documents.get('Book.md').trees.find(t => t.id === 'ABC123');
+  const at = typed.indexOf('[[');
+  await s.c.insertTarget(author.editor, author.file, tree, false, { from: { line: 2, ch: at - saved.lastIndexOf('\n') - 1 }, to: { line: 2, ch: typed.length - typed.lastIndexOf('\n') - 1 }, before: typed });
+  assert.ok(!notices.some(message => /保存を中止/.test(message)), notices.join('\n'));
+  assert.equal(s.h.vault.data.get('Page.md'), saved + '[[ABC123|Part]]');
+  assert.equal(author.editor.getValue(), saved + '[[ABC123|Part]]');
+  assert.ok(s.h.vault.saves >= 1, 'the owning view was saved before the commit');
+  s.close();
+});
