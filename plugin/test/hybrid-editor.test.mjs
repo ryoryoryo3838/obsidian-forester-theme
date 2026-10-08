@@ -18,12 +18,35 @@ test('real CodeMirror state provides replacements without modifying source, reve
  assert.equal(count(state),0);
  assert.equal(state.doc.toString(),source);
 });
-test('real CodeMirror extension includes a bounded tree TOC widget for headed subtrees',async()=>{
- const {parseHybrid}=await import('./build/hybrid-core.mjs');
- const text='---\nforester-mode: true\nforester-id: AAAAAA\n---\n# Main\n\n## First ^ABCD01\n\nBody.\n';
- const parsed=parseHybrid('Main.md',text,{folders:[],publicFolders:[],reservedIds:[]});
- const h={...host,document:()=>parsed};
- const s=EditorState.create({doc:text,selection:{anchor:text.length},extensions:editor.createHybridEditor(h)});
- const entries=[];for(const ds of s.facet(EditorView.decorations))if(typeof ds.between==='function')ds.between(0,s.doc.length,(_a,_b,v)=>{if(v.spec.widget?.entries)entries.push(...v.spec.widget.entries);});
- assert.equal(entries[0]?.title,'First');
+test('real CodeMirror omits inline TOC while keeping source, numbered headings and embed decorations',async()=>{
+ const {parseHybrid,indexHybrid,resolveHybrid}=await import('./build/hybrid-core.mjs');
+ const {treeOutline}=await import('./build/hybrid-display.mjs');
+ const options={folders:[],publicFolders:[],reservedIds:[]};
+ const text='---\nforester-mode: true\nforester-id: AAAAAA\n---\n# Main\n\n![[Book]]\n\n## First ^ABCD01\n#Claim\n\nBody.\n\n### Child ^ABCD02\n\nChild body.\n';
+ const parsed=parseHybrid('Main.md',text,options);
+ const book=parseHybrid('Book.md','---\nforester-id: BBBBBB\n---\n# Book\n\nBook body.\n',options);
+ const index=indexHybrid([parsed,book]);
+ const resolve=(target,path='Main.md')=>resolveHybrid(index,target,path);
+ const h={...host,document:()=>parsed,resolve};
+ let state=EditorState.create({doc:text,selection:{anchor:text.length},extensions:editor.createHybridEditor(h)});
+ const decorations=s=>{const values=[];for(const ds of s.facet(EditorView.decorations))if(typeof ds.between==='function')ds.between(0,s.doc.length,(_a,_b,v)=>values.push(v));return values;};
+ const assertNoToc=s=>{
+  const widgets=decorations(s).map(v=>v.spec.widget).filter(Boolean);
+  assert.equal(widgets.some(widget=>widget.constructor.name==='TocWidget'),false,'no inline TocWidget');
+  assert.equal(widgets.some(widget=>'entries' in widget),false,'no inline outline entries');
+  assert.equal(s.doc.toString(),text);
+ };
+ assertNoToc(state);
+ const values=decorations(state);
+ assert.equal(values.filter(v=>v.spec.class==='hybrid-tree-heading').length,3);
+ assert.deepEqual(values.map(v=>v.spec.widget?.label).filter(Boolean),['Claim 2','2.1']);
+ assert.equal(values.filter(v=>v.spec.widget?.span?.kind==='embed').length,1);
+ assert.equal(typeof treeOutline,'function','pure sidebar outline remains available');
+ const outline=treeOutline(parsed,resolve);
+ assert.deepEqual(outline.map(entry=>[entry.title,entry.number]),[['Book','1'],['First','2']]);
+ assert.deepEqual(outline[1].children.map(entry=>[entry.title,entry.number]),[['Child','2.1']]);
+ state=state.update({effects:editor.hybridRefresh.of(null)}).state;
+ assertNoToc(state);
+ state=state.update({selection:{anchor:text.indexOf('## First')}}).state;
+ assertNoToc(state);
 });

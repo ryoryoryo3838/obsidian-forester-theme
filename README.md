@@ -88,6 +88,12 @@ publish: false
 
 コマンドパレットの **Open Forester TOC / Backlinks / Related / References** で、それぞれのタブを開きます。
 
+Reading／Live Previewの本文下部には、純正Foresterのbackmatterと同じ順序で **References → Backlinks → Related** を表示します。空の欄は出さず、各項目は折り畳みで、展開時に本文を読み込みます。`[ID]`から定義元へ移動し、Ctrl/Cmdクリックは新しいleafへ開きます。各ペインの文書／明示したtree-pageに対応し、カーソル位置には追従しません。
+
+本文内のトグル付き「Tree目次」は撤去しました。目次は独立したTOCサイドバーを使います。標準ObsidianのBacklinksや設定は変更しないため、標準の「文書内バックリンク」を有効にしている場合は両方が表示されます。
+
+この変更の検証範囲は [ACCEPTANCE-BACKMATTER.md](ACCEPTANCE-BACKMATTER.md) を参照してください。既存Releaseの更新とは別の`v2`ソース変更です。
+
 - TOCの見出し：表示中のsectionへ移動。組み込み項目もその表示箇所へ移動し、定義元を開く操作とは分けます。
 - TOCの **■**：アドレスを持つ定義元treeへ移動。
 - Backlinks：現在treeを直接リンクしているtree。Related：現在treeが直接リンクする、Reference以外のtree。

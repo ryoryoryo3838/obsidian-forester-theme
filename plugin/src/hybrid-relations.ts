@@ -126,10 +126,10 @@ function* wikilinks(source: string, guards: SourceRange[]): Generator<WikiOccurr
  * Returned tree objects are the original model nodes; treat them as immutable.
  * Results sort by literal path, numeric source offset, level, then unique key.
  */
-export function createTreeRelations(
+function* prepareTreeRelations(
   index: HybridIndex,
   resolve: (target: string, fromPath: string) => HybridResolution,
-): { forTree(key: string): HybridTreeRelations } {
+): Generator<void, { forTree(key: string): HybridTreeRelations }> {
   const trees = new Map<string, HybridTree>();
   const links = new Map<string, Set<string>>();
   const inverse = new Map<string, Set<string>>();
@@ -145,9 +145,11 @@ export function createTreeRelations(
     !document.diagnostics.some(diagnostic => diagnostic.severity === 'error'));
   for (const document of documents) {
     for (const tree of document.trees) trees.set(tree.key, tree);
+    yield;
   }
   for (const tree of trees.values()) {
     if (tree.parentKey && trees.has(tree.parentKey)) add(transcludes, tree.parentKey, tree.key);
+    yield;
   }
   for (const document of documents) {
     // Parser ranges are laminar. A monotone interval stack assigns each
@@ -158,6 +160,7 @@ export function createTreeRelations(
     const guards = relationGuards(document);
     const targets = new Map<string, HybridResolution>();
     for (const occurrence of wikilinks(document.source, guards)) {
+      yield;
       while (owners.length && owners[owners.length - 1].to <= occurrence.from) owners.pop();
       while (treeAt < ordered.length && ordered[treeAt].from <= occurrence.from) {
         const tree = ordered[treeAt++];
@@ -178,6 +181,7 @@ export function createTreeRelations(
         add(inverse, result.tree.key, owner.key);
       }
     }
+    yield;
   }
   const compare = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
   const list = (keys: Iterable<string> = []): HybridTree[] => [...keys].map(key => trees.get(key)!)
@@ -216,4 +220,28 @@ export function createTreeRelations(
       };
     },
   };
+}
+
+/** Synchronous pure API: the same fact extraction/query implementation. */
+export function createTreeRelations(index: HybridIndex, resolve: (target: string, fromPath: string) => HybridResolution): { forTree(key: string): HybridTreeRelations } {
+  const work = prepareTreeRelations(index, resolve);
+  let step = work.next();
+  while (!step.done) step = work.next();
+  return step.value;
+}
+
+/** Adapter-owned scheduling; obsolete work never publishes a partial graph. */
+export async function createTreeRelationsAsync(index: HybridIndex, resolve: (target: string, fromPath: string) => HybridResolution,
+    control: { current(): boolean; yield(): Promise<void> }): Promise<ReturnType<typeof createTreeRelations> | undefined> {
+  const work = prepareTreeRelations(index, resolve);
+  let count = 0, start = performance.now();
+  while (control.current()) {
+    const step = work.next();
+    if (step.done) return control.current() ? step.value : undefined;
+    if (++count >= 32 || performance.now() - start >= 8) {
+      await control.yield(); count = 0; start = performance.now();
+    }
+  }
+  work.return(undefined as never);
+  return undefined;
 }

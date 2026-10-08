@@ -2,13 +2,14 @@ import { Component, editorInfoField, editorLivePreviewField, MarkdownRenderChild
 import { ViewPlugin, type EditorView } from '@codemirror/view';
 import type { EditorState } from '@codemirror/state';
 import { drawHybridId, hybridModeEnabled, indexHybrid, parseHybrid, planHybridSave, resolveHybrid } from './hybrid-core';
-import { createHybridEditor, hybridRefresh } from './hybrid-editor';
+import { createHybridEditor, hybridRefresh, type EditorBackmatter } from './hybrid-editor';
+import { renderBackmatter } from './hybrid-backmatter';
 import { commitHybridPlan } from './hybrid-save';
 import { projectPublic } from './hybrid-public';
 import { citationLabel, foresterTokens, planDisplay, treeOutline, type DisplaySpan, type EmbedFlags } from './hybrid-display';
 import { appendSlug, appendTaxon, renderMetadata, renderTreeHeader, type HeaderHost } from './hybrid-header';
 import { treeOccurrence, embedOccurrence, syntaxReady } from './hybrid-controller-helpers';
-import { createTreeRelations } from './hybrid-relations';
+import { createTreeRelations, createTreeRelationsAsync } from './hybrid-relations';
 import { encodeWikilinkLabel } from './hybrid-literal-label';
 import { registerHybridInput, type HybridInputHost } from './hybrid-input';
 import { registerHybridSidebar, type SidebarOutlineEntry } from './hybrid-sidebar';
@@ -16,6 +17,11 @@ import type { HybridDiagnostic, HybridDocument, HybridIndex, HybridOptions, Hybr
 
 interface TextPatch { from: number; to: number; text: string; }
 interface ViewRevision { path: string; revision: number; enabled: boolean; }
+interface BackmatterRequest {
+  document: HybridDocument; index: HybridIndex; view?: MarkdownView; editor?: Editor;
+  contextKey: string; revision: number; generation: number; optionsKey: string;
+  done: boolean; snapshot: EditorBackmatter | null;
+}
 
 // A timer task lets paint/input run; awaiting already-resolved IO only drains microtasks.
 const scheduleTask = globalThis.setTimeout.bind(globalThis);
@@ -87,6 +93,13 @@ export class HybridController {
   private readingHeaders = new WeakMap<HTMLElement, { child: MarkdownRenderChild; headings: HTMLElement[]; nodes: Element[]; signature: string }>();
   private readingEmbeds = new Map<HTMLElement, { section: HTMLElement; child: MarkdownRenderChild; wrapper: HTMLElement; path: string; source: string; from: number; signature: string }>();
   private readingLinks = new WeakMap<HTMLElement, { child: MarkdownRenderChild; anchors: HTMLElement[]; signature: string }>();
+  private backmatterGraphs = new WeakMap<HybridIndex, ReturnType<typeof createTreeRelations>>();
+  private readingBackmatter = new Map<MarkdownView, { parent: HTMLElement; container: HTMLElement; signature: string; source: string; cleanup: () => void }>();
+  private backmatterTimer?: ReturnType<typeof setTimeout>;
+  private backmatterRequests = new Map<object, BackmatterRequest>();
+  private backmatterSnapshotIndexes = new WeakMap<EditorBackmatter, HybridIndex>();
+  private backmatterPrepareTimer?: ReturnType<typeof setTimeout>;
+  private backmatterPreparing = false;
 
   constructor(private plugin: Plugin, private options: () => HybridOptions, private linkSuggest: () => boolean = () => true) {}
 
@@ -127,6 +140,11 @@ export class HybridController {
     const { vault, workspace, metadataCache } = this.plugin.app;
     this.plugin.register(() => {
       this.stopped = true;
+      if (this.backmatterTimer !== undefined) clearTimeout(this.backmatterTimer);
+      if (this.backmatterPrepareTimer !== undefined) clearTimeout(this.backmatterPrepareTimer);
+      this.backmatterRequests.clear();
+      for (const entry of this.readingBackmatter.values()) entry.cleanup();
+      this.readingBackmatter.clear(); this.backmatterGraphs = new WeakMap();
       if (this.listenerTimer !== undefined) clearTimeout(this.listenerTimer);
       this.listeners.clear(); this.lastMarkdown = undefined; this.relationIndex = undefined; this.relationGraph = undefined;
       this.refreshRequested = false;
@@ -155,7 +173,10 @@ export class HybridController {
     this.plugin.registerEvent(workspace.on('active-leaf-change', contextChanged));
     this.plugin.registerEvent(workspace.on('file-open', file => {
       const view = this.markdownView();
-      if (file && view?.file?.path === file.path) this.treePages.delete(view);
+      if (file && view?.file?.path === file.path) {
+        this.treePages.delete(view);
+        (view.editor as Editor & { cm?: EditorView }).cm?.dispatch({ effects: hybridRefresh.of(null) });
+      }
       this.notify();
     }));
     this.plugin.registerEvent(workspace.on('editor-change', (editor, info) => {
@@ -193,6 +214,12 @@ export class HybridController {
       resolve: (target, path) => resolveHybrid(this.fieldIndex, target, path),
       renderEmbed: (el, target, flags, path) => this.renderEmbed(el, target, flags, path),
       open: (target, path) => this.open(target, path),
+      backmatter: (document, state) => {
+        const editor = state.field(editorInfoField, false)?.editor;
+        const view = this.plugin.app.workspace.getLeavesOfType('markdown').map(leaf => leaf.view).find(view => view instanceof MarkdownView && view.editor === editor && view.file?.path === document.path) as MarkdownView | undefined;
+        return this.backmatterSnapshot(document, view, editor);
+      },
+      renderBackmatter: (el, document, snapshot) => this.renderDocumentBackmatter(el, document, snapshot),
     }), ViewPlugin.define(view => {
       this.nativeViews.add(view); this.rememberState(view.state);
       // Capture only inside this CM view, never at document/body level or on ordinary file links.
@@ -210,7 +237,8 @@ export class HybridController {
         destroy: () => { cleanup(); this.viewCleanups.delete(cleanup); this.nativeViews.delete(view); if (previous) this.forgetEditor(previous); },
       };
     })]);
-    this.plugin.registerMarkdownPostProcessor((el, ctx) => this.processReading(el, ctx));
+    this.plugin.registerMarkdownPostProcessor((el, ctx) => { this.scheduleReadingBackmatter(); return this.processReading(el, ctx); });
+    this.plugin.registerEvent(workspace.on('layout-change', () => this.scheduleReadingBackmatter()));
     this.plugin.registerMarkdownCodeBlockProcessor('forester', (source, el, ctx) => {
       const dom = el.ownerDocument;
       if (!this.isEnabled(ctx.sourcePath) || !syntaxReady(this.index.documents.get(ctx.sourcePath))) {
@@ -320,6 +348,7 @@ export class HybridController {
   }
 
   private refreshViews(previous: HybridIndex): void {
+    this.scheduleReadingBackmatter();
     const views = new Map<EditorView, { path: string; source?: string }>();
     const collect = (cm: EditorView | undefined, file?: TFile, editor?: Editor): void => {
       if (!cm) return;
@@ -383,6 +412,7 @@ export class HybridController {
   private forgetEditor(editor: Editor): void {
     if ([...this.nativeViews].some(view => view.state.field(editorInfoField, false)?.editor === editor)) return;
     this.observedEditors.delete(editor);
+    this.backmatterRequests.delete(editor);
     const timer = this.settled.get(editor); if (timer !== undefined) clearTimeout(timer); this.settled.delete(editor);
   }
 
@@ -686,9 +716,162 @@ export class HybridController {
     if (!view || !path) return null;
     const document = this.parse(path, view.editor.getValue());
     if (!syntaxReady(document)) return null;
-    const page = this.treePages.get(view);
-    const tree = page?.path === path ? document.trees.find(tree => page.id ? tree.id?.toLowerCase() === page.id.toLowerCase() : tree.key === page.key) ?? document.root : document.root;
+    const tree = this.pageTree(document, view);
     return { document, tree };
+  }
+
+  private pageTree(document: HybridDocument, view?: MarkdownView): HybridTree {
+    const page = view ? this.treePages.get(view) : undefined;
+    return page?.path === document.path ? document.trees.find(tree => page.id ? tree.id?.toLowerCase() === page.id.toLowerCase() : tree.key === page.key) ?? document.root : document.root;
+  }
+
+  private graphFor(index: HybridIndex): ReturnType<typeof createTreeRelations> {
+    let graph = this.backmatterGraphs.get(index);
+    if (!graph) {
+      graph = createTreeRelations(index, (target, path) => resolveHybrid(index, target, path));
+      this.backmatterGraphs.set(index, graph);
+    }
+    return graph;
+  }
+
+  /** StateField path: cached exact-context lookup or queue only, never a graph/query scan. */
+  private backmatterSnapshot(document: HybridDocument, view?: MarkdownView, editor?: Editor): EditorBackmatter | null {
+    const owner = editor ?? view;
+    if (this.stopped || !owner || !syntaxReady(document)) return null;
+    const contextKey = this.pageTree(document, view).key, optionsKey = this.configuration().key;
+    const old = this.backmatterRequests.get(owner);
+    if (old && old.document.path === document.path && old.document.source === document.source && old.contextKey === contextKey &&
+        old.view === view && old.revision === this.revision && old.generation === this.sourceGeneration && old.optionsKey === optionsKey) return old.snapshot;
+    this.backmatterRequests.set(owner, { document, index: this.overlay(document), view, editor, contextKey,
+      revision: this.revision, generation: this.sourceGeneration, optionsKey, done: false, snapshot: null });
+    this.scheduleBackmatterPreparation();
+    return null;
+  }
+
+  private backmatterCurrent(owner: object, request: BackmatterRequest): boolean {
+    if (this.stopped || this.backmatterRequests.get(owner) !== request || request.revision !== this.revision ||
+        request.generation !== this.sourceGeneration || request.optionsKey !== this.configuration().key) return false;
+    const leaves = this.plugin.app.workspace.getLeavesOfType('markdown');
+    if (request.view && !leaves.some(leaf => leaf.view === request.view)) return false;
+    if (this.pageTree(request.document, request.view).key !== request.contextKey) return false;
+    if (request.editor) {
+      const state = (request.editor as Editor & { cm?: EditorView }).cm?.state;
+      const info = state?.field(editorInfoField, false);
+      return !!state?.field(editorLivePreviewField, false) && info?.editor === request.editor &&
+        info.file?.path === request.document.path && state.doc.toString() === request.document.source &&
+        leaves.some(leaf => leaf.view instanceof MarkdownView && leaf.view.editor === request.editor);
+    }
+    return request.view?.getMode() === 'preview' && request.view.file?.path === request.document.path && request.view.editor.getValue() === request.document.source;
+  }
+
+  private scheduleBackmatterPreparation(): void {
+    if (this.stopped || this.backmatterPreparing) return;
+    if (this.backmatterPrepareTimer !== undefined) clearTimeout(this.backmatterPrepareTimer);
+    // Trailing coalescing means rapid drafts prepare only the final source.
+    this.backmatterPrepareTimer = scheduleTask(() => {
+      this.backmatterPrepareTimer = undefined;
+      void this.prepareBackmatter().catch(error => { if (!this.stopped) console.error('Hybrid backmatter preparation', error); });
+    }, 30);
+  }
+
+  private async prepareBackmatter(): Promise<void> {
+    this.backmatterPreparing = true;
+    try {
+      for (const [owner, request] of [...this.backmatterRequests]) {
+        if (request.done) continue;
+        const current = (): boolean => this.backmatterCurrent(owner, request);
+        if (!current()) { if (this.backmatterRequests.get(owner) === request) this.backmatterRequests.delete(owner); continue; }
+        const index = request.index;
+        let graph = this.backmatterGraphs.get(index);
+        if (!graph) graph = await createTreeRelationsAsync(index, (target, path) => resolveHybrid(index, target, path), {
+          current, yield: () => new Promise<void>(resolve => scheduleTask(resolve, 0)),
+        });
+        if (!graph || !current()) { if (this.backmatterRequests.get(owner) === request) this.backmatterRequests.delete(owner); continue; }
+        this.backmatterGraphs.set(index, graph);
+        const groups = graph.forTree(request.contextKey);
+        request.done = true;
+        if (groups.references.length || groups.backlinks.length || groups.related.length) {
+          request.snapshot = { groups, contextKey: request.contextKey, signature: `${request.revision}:${request.generation}:${request.contextKey}` };
+          // A deferred widget keeps summary, resolver and lazy body on one immutable index.
+          this.backmatterSnapshotIndexes.set(request.snapshot, index);
+        }
+        if (request.editor) (request.editor as Editor & { cm?: EditorView }).cm?.dispatch({ effects: hybridRefresh.of(null) });
+        else this.scheduleReadingBackmatter();
+      }
+    } finally {
+      this.backmatterPreparing = false;
+      if (!this.stopped && [...this.backmatterRequests.values()].some(request => !request.done)) this.scheduleBackmatterPreparation();
+    }
+  }
+
+  private renderDocumentBackmatter(container: HTMLElement, document: HybridDocument, snapshot: EditorBackmatter): () => void {
+    if (this.stopped || !syntaxReady(document)) return () => {};
+    const index = this.backmatterSnapshotIndexes.get(snapshot);
+    if (!index || index.documents.get(document.path)?.source !== document.source) return () => {};
+    const owner = this.plugin.addChild(new Component()); owner.load();
+    let disposed = false;
+    const release = (): void => { if (!disposed) { disposed = true; this.plugin.removeChild(owner); } };
+    owner.register(() => { disposed = true; });
+    try {
+      owner.register(renderBackmatter(container, snapshot.groups, {
+        resolve: (target, path) => resolveHybrid(index, target, path),
+        open: (target, path) => { if (!disposed) this.open(target, path, index); },
+        openTree: (tree, newLeaf) => disposed ? undefined : this.openTree(tree, newLeaf, document.path),
+        renderBody: (el, tree) => {
+          if (disposed || this.stopped) return;
+          const targetDoc = index.documents.get(tree.path);
+          if (!syntaxReady(targetDoc)) return;
+          const target = tree === targetDoc.root ? tree.path : `${tree.path}#${tree.id ? '^' + tree.id : tree.headingTitle ?? tree.meta.title}`;
+          return this.renderEmbed(el, target, { target, heading: false, toc: false }, document.path, owner, index, []);
+        },
+        reportError: error => { if (!disposed && !this.stopped) new Notice(`Forester backmatter: ${String(error)}`, 8000); },
+      }));
+    } catch (error) { release(); throw error; }
+    return release;
+  }
+
+  private scheduleReadingBackmatter(): void {
+    if (this.stopped || this.backmatterTimer !== undefined) return;
+    this.backmatterTimer = scheduleTask(() => {
+      this.backmatterTimer = undefined;
+      if (!this.stopped) this.syncReadingBackmatter();
+    }, 0);
+  }
+
+  private syncReadingBackmatter(): void {
+    for (const [owner, request] of this.backmatterRequests) if (!this.backmatterCurrent(owner, request)) this.backmatterRequests.delete(owner);
+    const seen = new Set<MarkdownView>();
+    for (const leaf of this.plugin.app.workspace.getLeavesOfType('markdown')) {
+      if (!(leaf.view instanceof MarkdownView)) continue;
+      const view = leaf.view, path = view.file?.path;
+      if (!path || view.getMode() !== 'preview' || !this.index.documents.has(path)) continue;
+      const preview = Array.from(view.containerEl.querySelectorAll<HTMLElement>('.markdown-preview-view')).find(el => !el.closest('.internal-embed, .hybrid-embed, .markdown-embed, [data-hybrid-render]'));
+      const parent = preview?.querySelector<HTMLElement>(':scope > .markdown-preview-sizer');
+      if (!parent) continue;
+      const document = this.parse(path, view.editor.getValue());
+      const snapshot = this.backmatterSnapshot(document, view);
+      if (!snapshot) continue;
+      seen.add(view);
+      const old = this.readingBackmatter.get(view);
+      if (old?.parent === parent && old.container.parentElement === parent && old.signature === snapshot.signature && old.source === document.source) {
+        if (parent.lastElementChild !== old.container) parent.append(old.container);
+        continue;
+      }
+      old?.cleanup();
+      const container = parent.ownerDocument.createElement('div');
+      container.className = 'hybrid-backmatter-host'; container.setAttribute('data-hybrid-render', String(this.revision));
+      parent.append(container);
+      try {
+        const release = this.renderDocumentBackmatter(container, document, snapshot);
+        let disposed = false;
+        const cleanup = (): void => { if (!disposed) { disposed = true; release(); container.remove(); } };
+        this.readingBackmatter.set(view, { parent, container, signature: snapshot.signature, source: document.source, cleanup });
+      } catch (error) {
+        container.remove(); this.readingBackmatter.delete(view);
+        new Notice(`Forester backmatter: ${String(error)}`, 8000);
+      }
+    }
+    for (const [view, entry] of this.readingBackmatter) if (!seen.has(view)) { entry.cleanup(); this.readingBackmatter.delete(view); }
   }
 
   outline(document: HybridDocument, tree: HybridTree): SidebarOutlineEntry[] {
@@ -714,6 +897,7 @@ export class HybridController {
     if (this.stopped) return;
     const view = this.markdownView();
     if (view?.file?.path === current.path && (!newLeaf || view !== previous)) this.treePages.set(view, { path: current.path, key: current.key, id: current.id });
+    if (view?.file?.path === current.path) (view.editor as Editor & { cm?: EditorView }).cm?.dispatch({ effects: hybridRefresh.of(null) });
     this.notify();
   }
 
@@ -777,12 +961,9 @@ export class HybridController {
   }
 
   relations(tree: HybridTree): ReturnType<ReturnType<typeof createTreeRelations>['forTree']> {
-    const index = this.currentIndex();
-    if (index !== this.relationIndex) {
-      this.relationIndex = index;
-      this.relationGraph = createTreeRelations(index, (target, path) => resolveHybrid(index, target, path));
-    }
-    return this.relationGraph!.forTree(tree.key);
+    this.relationIndex = this.currentIndex();
+    this.relationGraph = this.graphFor(this.relationIndex);
+    return this.relationGraph.forTree(tree.key);
   }
 
   subscribe(update: () => void): () => void {
@@ -792,6 +973,7 @@ export class HybridController {
   }
 
   private notify(): void {
+    this.scheduleReadingBackmatter();
     if (this.stopped || !this.listeners.size || this.listenerTimer !== undefined) return;
     this.listenerTimer = scheduleTask(() => {
       this.listenerTimer = undefined;
@@ -895,6 +1077,7 @@ export class HybridController {
     if (this.stopped || !view.state.field(editorLivePreviewField, false)) return;
     const info = view.state.field(editorInfoField, false);
     const clicked = event.target as HTMLElement | null;
+    if (clicked?.closest?.('.hybrid-backmatter-host')) return; // Footer routes own their identity; EOF is not a source link.
     if (clicked?.closest?.('.hybrid-header-slug .hybrid-slug') && info?.file && this.isEnabled(info.file.path, view.state.doc.toString())) {
       const document = this.parse(info.file.path, view.state.doc.toString());
       let at: number; try { at = view.posAtDOM(clicked); } catch { return; }
@@ -903,14 +1086,7 @@ export class HybridController {
       if (tree?.id) { event.preventDefault(); event.stopImmediatePropagation(); void this.openTree(tree, event.ctrlKey || event.metaKey, info.file.path).catch(error => new Notice(`Hybrid navigation: ${String(error)}`, 8000)); }
       return;
     }
-    const toc = clicked?.closest?.('.hybrid-toc'), anchor = clicked?.closest?.('a');
-    if (toc && anchor && info?.file && this.isEnabled(info.file.path, view.state.doc.toString())) {
-      const document = this.parse(info.file.path, view.state.doc.toString());
-      const flatten = (entries: SidebarOutlineEntry[]): SidebarOutlineEntry[] => entries.reduce<SidebarOutlineEntry[]>((all, entry) => all.concat(entry, flatten(entry.children)), []);
-      const entry = flatten(this.outline(document, document.root))[Array.from(toc.querySelectorAll('a')).indexOf(anchor)];
-      if (entry) { event.preventDefault(); event.stopImmediatePropagation(); void this.focusOccurrence(entry); }
-      return;
-    }
+
     if (!info?.file || !this.isEnabled(info.file.path, view.state.doc.toString())) return;
     const element = event.target as HTMLElement | null;
     const link = element?.closest?.('a.internal-link, .cm-hmd-internal-link');
@@ -1045,7 +1221,7 @@ export class HybridController {
 
   private headerHeadings(el: HTMLElement): HTMLElement[] {
     return Array.from(el.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6')).filter(h => {
-      for (let parent = h.parentElement; parent && parent !== el; parent = parent.parentElement) if (parent.matches('pre, code, blockquote, .internal-embed, .hybrid-embed, .hybrid-tree-header')) return false;
+      for (let parent = h.parentElement; parent && parent !== el; parent = parent.parentElement) if (parent.matches('pre, code, blockquote, .internal-embed, .hybrid-embed, .hybrid-tree-header, .hybrid-backmatter-host')) return false;
       return true;
     });
   }

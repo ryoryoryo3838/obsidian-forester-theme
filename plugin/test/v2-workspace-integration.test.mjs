@@ -197,26 +197,19 @@ test('native ID commands preserve their IDs and mint cursor-owned trees through 
   plugin.unload(); h.plugin.unload();
 });
 
-test('bare-ID navigation changes the tree page while actual inline TOC widget titles only focus locally', async () => {
+test('bare-ID navigation changes the tree page while sidebar TOC occurrences only focus locally', async () => {
   const page = '# Page\n\n## Part ^part-id\nText\n\n### Child ^child-id\nMore';
   const { h, c } = await setup({ 'Page.md': page }); const view = h.open('Page.md');
-  const state = view.editor.attach(h.plugin.extensions); const dom = document.createElement('div');
-  let toc;
-  for (const ds of state.facet((await import('@codemirror/view')).EditorView.decorations)) if (typeof ds.between === 'function') ds.between(0, state.doc.length, (_f, _t, d) => { if (d.spec.widget?.entries) toc = d.spec.widget; });
-  dom.append(toc.toDOM()); view.containerEl.append(dom);
-  const native = { dom, state, posAtDOM: () => page.indexOf('## Part') };
-  let capture; const add = dom.addEventListener.bind(dom);
-  dom.addEventListener = (type, listener, options) => { if (type === 'click' && options === true) capture = listener; add(type, listener, options); };
-  const lifecycle = h.plugin.extensions[0][1].create(native);
-  // linkedom does not implement parent-before-target capture ordering. Deliver
-  // the native CM capture event at that boundary; adapter/parser/focus are real.
-  const event = new window.Event('click', { bubbles: true, cancelable: true });
-  Object.defineProperty(event, 'target', { value: dom.querySelector('.hybrid-toc a') });
-  capture(event); await drain();
-  assert.equal(h.workspace.opens.length, 0, 'actual inline TOC capture prevents definition navigation');
+  const state = view.editor.attach(h.plugin.extensions);
+  let inlineToc = false;
+  for (const ds of state.facet((await import('@codemirror/view')).EditorView.decorations)) if (typeof ds.between === 'function') ds.between(0, state.doc.length, (_f, _t, d) => { if (d.spec.widget?.entries) inlineToc = true; });
+  assert.equal(inlineToc, false, 'the document Tree目次 widget has been removed');
+  const context = c.current(), entry = c.outline(context.document, context.tree)[0];
+  await c.focusOccurrence(entry);
+  assert.equal(h.workspace.opens.length, 0, 'sidebar TOC local focus does not navigate to a definition');
   assert.equal(c.current().tree.level, 1); assert.equal(view.editor.getCursor().line, 2);
   c.open('part-id', 'Page.md'); await drain(); assert.equal(c.current().tree.id, 'part-id', 'ID links select a new tree page');
-  lifecycle.destroy(); h.plugin.unload();
+  h.plugin.unload();
 });
 
 test('manual root mint preserves BOM/frontmatter and root ID type in the real adapter', async () => {

@@ -76,7 +76,7 @@ Excluded notes receive neither hybrid rewrites nor legacy fallback formatting/mi
 ![[Note#^B4C2D1]] %%ht%%
 ```
 
-`h` hides the complete header, `t` omits that occurrence from the tree TOC. Only the preceding standalone embed on the same line is affected. Unknown short flags are diagnosed. Metadata/title of the definition is unchanged. The Live Preview tree TOC is collapsible and bounded; it includes transclusions unless `t` hides them. It is independent of Obsidian's core Outline pane.
+`h` hides the complete header, `t` omits that occurrence from the sidebar tree TOC. Only the preceding standalone embed on the same line is affected. Unknown short flags are diagnosed. Metadata/title of the definition is unchanged. The sidebar tree TOC includes transclusions unless `t` hides them and is independent of Obsidian's core Outline pane. The former inline Live Preview `Tree目次` toggle/widget has been removed; the individual TOC sidebar remains.
 
 An addressed heading also accepts `[[B4C2D1]]` and `![[B4C2D1]]` without knowing its parent file. The ID index resolves the definition and its entire heading section, including lower-level headings until the next equal/higher-level heading. The file-qualified `![[Note#^B4C2D1]]` uses that same section, not Obsidian's default single-heading block. Different-file-name or alias collisions remain ambiguous rather than silently selecting a target; a file root and its own matching ID are one resolved identity.
 

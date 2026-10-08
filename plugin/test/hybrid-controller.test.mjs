@@ -453,10 +453,12 @@ test('CodeMirror/editor failures inside commit are reported rather than swallowe
 test('recursive display resolution retains the current unsaved document overlay even when the source path changes', async () => {
   const disk = optin('# Page\n\nOld body');
   const unsaved = optin('# Page\n\n![[book-id]]\n\n## Unsaved child ^child-id\nBody');
-  const h = createHarness({ 'Page.md': disk, 'Book.md': optin('# Book\n\n![[Page#Unsaved child]]\n', 'forester-id: book-id\n') }); await controller(h);
-  const view = h.open('Page.md'), state = view.editor.attach(h.plugin.extensions, true, unsaved);
-  let entries; for (const ds of state.facet(EditorView.decorations)) if (typeof ds.between === 'function') ds.between(0, state.doc.length, (_from, _to, d) => { if (d.spec.widget?.entries) entries = d.spec.widget.entries; });
-  assert.equal(entries?.[0]?.title, 'Book'); assert.equal(entries?.[0]?.children?.[0]?.title, 'Unsaved child', 'all recursive resolver calls use the same overlay index'); h.plugin.unload();
+  const h = createHarness({ 'Page.md': disk, 'Book.md': optin('# Book\n\n![[Page#Unsaved child]]\n', 'forester-id: book-id\n') }); const c = await controller(h);
+  const view = h.open('Page.md', unsaved), state = view.editor.attach(h.plugin.extensions, true, unsaved);
+  const context = c.current();
+  const entries = c.outline(context.document, context.tree);
+  assert.equal(entries[0]?.title, 'Book'); assert.equal(entries[0]?.children?.[0]?.title, 'Unsaved child', 'sidebar recursive resolver calls use the same unsaved overlay index');
+  assert.equal(state.doc.toString(), unsaved); assert.equal(h.vault.data.get('Page.md'), disk); h.plugin.unload();
 });
 
 test('Reading heading badges agree with Live Preview occurrence numbering when an embed precedes a subtree', async () => {

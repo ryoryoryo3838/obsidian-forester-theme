@@ -2,9 +2,11 @@ import {EditorState} from '@codemirror/state';
 import {EditorView} from '@codemirror/view';
 import {parseHybrid,indexHybrid,resolveHybrid} from '../src/hybrid-core';
 import {createHybridEditor} from '../src/hybrid-editor';
+import {createTreeRelations} from '../src/hybrid-relations';
+import {renderBackmatter} from '../src/hybrid-backmatter';
 const options={folders:[],publicFolders:[],reservedIds:[]};
 const source='---\nforester-mode: true\nforester-id: AAAAAA\n---\n# Demo\n\n## Claim ^ABCD01\n#Claim\n\nA citation {ref:[[Book]]}.\n\n![[Book]] %%ht%%\n\nRaw: \\{ \\strong{Example} }.\n';
-const book=parseHybrid('Book.md','---\nforester-mode: true\nforester-id: BBBBBB\ncitation-authors: [Bates]\npublication-year: 2022\n---\n# Book\n\nEmbedded body.\n',options);
+const book=parseHybrid('Book.md','---\nforester-mode: true\nforester-id: BBBBBB\ntaxon: Reference\ncitation-authors: [Bates]\npublication-year: 2022\n---\n# Book\n\nEmbedded body.\n',options);
 const doc=parseHybrid('Demo.md',source,options);
 const index=indexHybrid([doc,book]);
 const host={
@@ -16,7 +18,13 @@ const host={
   if(flags.heading){const h=document.createElement('h3');h.textContent=r.tree.meta.title;el.append(h);}
   const body=document.createElement('div');body.textContent=r.document.source.slice(r.tree.contentFrom,r.tree.to);el.append(body);
  },
- open:(target:string)=>{(window as any).opened=target;}
+ open:(target:string)=>{(window as any).opened=target;},
+ backmatter:(document:typeof doc)=>({groups:createTreeRelations(index,(target,path)=>resolveHybrid(index,target,path)).forTree(document.root.key),contextKey:document.root.key,signature:'browser-footer'}),
+ renderBackmatter:(el:HTMLElement,_document:typeof doc,snapshot:{groups:ReturnType<ReturnType<typeof createTreeRelations>['forTree']>})=>renderBackmatter(el,snapshot.groups,{
+  resolve:(target,path)=>resolveHybrid(index,target,path),open:target=>{(window as any).opened=target;},
+  openTree:(tree,newLeaf)=>{(window as any).openedTree={path:tree.path,newLeaf};},
+  renderBody:(el,tree)=>{const target=index.documents.get(tree.path)!;el.textContent=target.source.slice(tree.contentFrom,tree.to);},
+ }),
 };
 const view=new EditorView({state:EditorState.create({doc:source,selection:{anchor:source.length},extensions:[createHybridEditor(host)]}),parent:document.getElementById('editor')!});
 (window as any).probe={view,source,doc,index};
@@ -28,7 +36,10 @@ const view=new EditorView({state:EditorState.create({doc:source,selection:{ancho
  results.hideHeading=!embed?.querySelector('h3');results.hideToc=(embed as HTMLElement)?.dataset.toc==='false';
  results.raw=document.querySelector('.hybrid-raw')?.textContent?.includes('Forester · 未評価')??false;
  results.highlight=!!document.querySelector('.hybrid-token-command');
- results.toc=document.querySelectorAll('.hybrid-toc a').length===1;
+ results.noInlineToc=document.querySelectorAll('.hybrid-toc').length===0&&!Array.from(document.querySelectorAll('summary')).some(el=>el.textContent==='Tree目次');
+ results.footerAtEnd=!!document.querySelector('.cm-content > .hybrid-backmatter-host:last-child [data-hybrid-backmatter]');
+ results.footerReference=!!document.querySelector('[data-hybrid-backmatter-group="references"]');
+ results.footerInitiallyCollapsed=!document.querySelector('.hybrid-backmatter-item')?.hasAttribute('open');
  results.unchanged=view.state.doc.toString()===source;
  const cursor=source.indexOf('{ref:')+2;view.dispatch({selection:{anchor:cursor}});
  results.editable=!document.querySelector('.hybrid-citation');

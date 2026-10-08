@@ -1,14 +1,34 @@
 import { EditorState, Prec, StateEffect, StateField, type Extension, type Range } from '@codemirror/state';
 import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view';
 import type { HybridDocument, HybridResolution, HybridTree } from './hybrid-types';
-import { planDisplay, rootHeadingAt, foresterTokens, treeOutline, type OutlineEntry, type DisplaySpan, type EmbedFlags } from './hybrid-display';
+import { planDisplay, rootHeadingAt, foresterTokens, type DisplaySpan, type EmbedFlags } from './hybrid-display';
 import { appendTaxon, appendSlug, renderMetadata, renderTreeHeader } from './hybrid-header';
+import type { BackmatterGroups } from './hybrid-backmatter';
 export const hybridRefresh = StateEffect.define<null>();
+export interface EditorBackmatter {
+  groups: BackmatterGroups;
+  contextKey: string;
+  signature: string;
+}
 export interface HybridEditorHost {
   document(state:EditorState): HybridDocument | null;
   resolve(target:string,path:string): HybridResolution;
   renderEmbed(el:HTMLElement,target:string,flags:EmbedFlags,path:string): (()=>void) | void;
   open(target:string,path:string): void;
+  backmatter?(document:HybridDocument,state:EditorState):EditorBackmatter | null;
+  renderBackmatter?(el:HTMLElement,document:HybridDocument,snapshot:EditorBackmatter):(()=>void) | void;
+}
+class BackmatterWidget extends WidgetType {
+  private cleanup?:()=>void;
+  constructor(readonly backmatter:EditorBackmatter,private document:HybridDocument,private host:HybridEditorHost){super();}
+  eq(other:BackmatterWidget):boolean{return this.host===other.host&&this.document.path===other.document.path&&this.document.source===other.document.source&&this.backmatter.signature===other.backmatter.signature;}
+  toDOM():HTMLElement {
+    const el=globalThis.document.createElement('div');el.className='hybrid-backmatter-host';
+    this.cleanup=this.host.renderBackmatter?.(el,this.document,this.backmatter)??undefined;
+    return el;
+  }
+  destroy():void{this.cleanup?.();this.cleanup=undefined;}
+  ignoreEvent():boolean{return true;}
 }
 class HeaderPart extends WidgetType {
   private cleanups:Array<()=>void>=[];
@@ -30,25 +50,6 @@ class Label extends WidgetType {
   constructor(private label:string) {super();}
   eq(other:Label):boolean{return this.label===other.label;}
   toDOM():HTMLElement { const el=document.createElement('span');el.className='hybrid-taxon-number';el.textContent=this.label+' ';return el; }
-}
-class TocWidget extends WidgetType {
-  constructor(readonly entries:OutlineEntry[],private path:string,private host:HybridEditorHost){super();}
-  eq(other:TocWidget):boolean{return JSON.stringify(this.entries)===JSON.stringify(other.entries);}
-  toDOM():HTMLElement{
-    const details=document.createElement('details');details.className='hybrid-toc';
-    const summary=document.createElement('summary');summary.textContent='Tree目次';details.append(summary);
-    const list=(entries:OutlineEntry[]):HTMLElement=>{
-      const ul=document.createElement('ul');
-      for(const entry of entries){
-        const li=document.createElement('li'),a=document.createElement('a');a.textContent=`${entry.number} ${entry.title}`;a.href='#';
-        a.addEventListener('click',e=>{e.preventDefault();this.host.open(entry.target,this.path);});li.append(a);
-        if(entry.children.length)li.append(list(entry.children));ul.append(li);
-      }
-      return ul;
-    };
-    details.append(list(this.entries));return details;
-  }
-  ignoreEvent():boolean{return true;}
 }
 class HybridWidget extends WidgetType {
   private cleanup?:()=>void;
@@ -85,8 +86,6 @@ export function createHybridEditor(host:HybridEditorHost):Extension {
     const selected=state.selection.ranges.map(r=>({from:r.from,to:r.to}));
     const plan=planDisplay(doc,selected,(target,path)=>host.resolve(target,path??doc.path));
     const ranges:Range<Decoration>[]=[];
-    const entries=treeOutline(doc,(target,path)=>host.resolve(target,path??doc.path));
-    if(entries.length)ranges.push(Decoration.widget({widget:new TocWidget(entries,doc.path,host),block:true,side:-1}).range(Math.min(doc.root.contentFrom,state.doc.length)));
     const labels=new Map(plan.headings.map(h=>[h.at,h.label]));
     for(const tree of doc.trees){
       const position=tree===doc.root?rootHeadingAt(doc):tree.from;
@@ -108,6 +107,8 @@ export function createHybridEditor(host:HybridEditorHost):Extension {
       const spec=span.kind==='metadata'?{}:{widget:new HybridWidget(span,doc.path,host),block:span.kind==='embed'};
       ranges.push(Decoration.replace(spec).range(span.from,span.to));
     }
+    const backmatter=host.backmatter?.(doc,state);
+    if(backmatter&&host.renderBackmatter)ranges.push(Decoration.widget({widget:new BackmatterWidget(backmatter,doc,host),block:true,side:1}).range(state.doc.length));
     return Decoration.set(ranges,true);
   };
   const field=StateField.define<DecorationSet>({create:build,update:(value,tr)=>tr.docChanged||tr.selection||tr.reconfigured||tr.effects.some(e=>e.is(hybridRefresh))?build(tr.state):value,provide:f=>EditorView.decorations.from(f)});

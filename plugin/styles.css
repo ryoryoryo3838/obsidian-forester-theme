@@ -47,6 +47,50 @@ body.forester-enabled.theme-dark {
 .hybrid-error { color: var(--text-error); }
 .hybrid-citation a { color: var(--link-color); cursor: pointer; }
 
+/* Forester backmatter: note footer, not a replacement for native UI or sidebar tabs. */
+.hybrid-backmatter {
+	margin-block-start: 2em;
+	padding-block-start: 1em;
+	border-block-start: 1px solid var(--background-modifier-border);
+	color: var(--text-normal);
+}
+.hybrid-backmatter .hybrid-backmatter-group { margin-block: 0 1.25em; }
+.hybrid-backmatter .hybrid-backmatter-group > h2 {
+	margin-block: 0 .5em;
+	color: var(--text-normal);
+	font-family: "BIZ UDMincho", "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", Georgia, serif;
+	font-size: 1.2em;
+	font-weight: bold;
+	line-height: 1.3;
+}
+.hybrid-backmatter .hybrid-backmatter-item { margin-block: 0 .4em; }
+.hybrid-backmatter .hybrid-backmatter-item[open] { margin-block-end: 1em; }
+.hybrid-backmatter .hybrid-backmatter-item > summary {
+	display: list-item;
+	cursor: pointer;
+	color: var(--text-normal);
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+}
+.hybrid-backmatter .hybrid-backmatter-title {
+	font-family: "BIZ UDMincho", "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", Georgia, serif;
+	font-weight: bold;
+}
+.hybrid-backmatter .hybrid-taxon-number { color: var(--text-normal); }
+.hybrid-backmatter .hybrid-backmatter-item > summary > a.hybrid-slug {
+	color: var(--text-muted, gray);
+	font-family: var(--font-monospace, monospace);
+	text-decoration: underline dotted;
+}
+.hybrid-backmatter .hybrid-slug:focus-visible,
+.hybrid-backmatter .hybrid-backmatter-item > summary:focus-visible {
+	outline: 2px solid var(--interactive-accent, currentColor);
+	outline-offset: 2px;
+}
+.hybrid-backmatter .hybrid-metadata { margin-block: .15em .5em; }
+.hybrid-backmatter .hybrid-backmatter-body { margin-block-start: .5em; }
+.hybrid-backmatter .hybrid-backmatter-error { color: var(--text-error); }
+
 /* ── .block ───────────────────────────────────────────────────────────────── */
 /* style.css: .block { padding-left:5px; padding-right:10px; padding-bottom:2px;
    border-radius:5px } and .block:hover { background: rgba(0,100,255,.04) } */
