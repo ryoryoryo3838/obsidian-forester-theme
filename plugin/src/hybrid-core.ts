@@ -414,6 +414,9 @@ function consumeMetadata(tree: HybridTree, source: string, diagnostics: HybridDi
     const content = start + opening[0].length;
     const close = source.indexOf('%%', content);
     let yaml = source.slice(content, close < 0 ? source.length : close).trim();
+    // `p` is definition metadata, not an embed display flag. Reuse the
+    // longhand publication path, including malformed/unclosed fail-closed handling.
+    if (yaml === 'p' || (close < 0 && /^p[ \t]*\r?\n/.test(yaml))) yaml = 'publish: false';
     if (!/^(?:forester(?:\s|$)|[\w-]+\s*:|\{)/.test(yaml)) return;
     if (close < 0) {
       diagnostics.push({ code: 'invalid-metadata', message: 'Unclosed Forester metadata comment', path: tree.path, line: tree.line, severity: 'error' });

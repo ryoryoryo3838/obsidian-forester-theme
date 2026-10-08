@@ -117,6 +117,19 @@ publication-year: 2022
 
 公開は既定でfalse。設定の **Public folders** は表示／解析の対象とは独立です。意図して公開する資料だけを配置してください。
 
+subtreeを非公開にする省略形は **`%%p%%`（private）**。見出し直後のmetadataとして置き、`%% publish: false %%`と同じ公開境界を作ります。
+
+```markdown
+## 非公開の節 ^ABCDEF
+%%p%%
+
+公開しない本文。
+```
+
+子subtreeも非公開を継承しますが、子に`publish: true`を明示すれば例外公開です。Obsidian内では通常どおり読めます。埋め込み表示用の`h`/`t`とは別の指定なので、`%%htp%%`や埋め込み末尾には書きません。
+
+**この省略形には対応ビルドのplugin／公開CLIが必要です。古い配布版は`%%p%%`を無視するため、更新するまでは長い`%% publish: false %%`を使用してください。**
+
 ```markdown
 ## 公開する部分 ^D0C0DE
 %% publish: true %%

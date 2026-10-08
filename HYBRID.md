@@ -121,6 +121,19 @@ The scanner balances nested braces and protects Forester escapes/comments/verbat
 
 ## Partial publication
 
+Put `%%p%%` (**p = private**) at the beginning of a subtree's metadata block, immediately after its heading. It is shorthand for `%% publish: false %%`:
+
+```markdown
+## Private section ^ABCDEF
+%%p%%
+
+This body is not included in public projection.
+```
+
+Whitespace such as `%% p %%` and a dedicated taxon line before/after it are accepted. Children inherit private status unless a child explicitly declares `publish: true`; sibling sections retain their own parent inheritance. The shorthand does not grant `public-title`, hide local Obsidian content or change the source text. Code/raw/math/quote examples and comments after body text are not metadata. It is **not** an inline heading suffix or an embed flag: `![[ID]] %%p%%` and `%%htp%%` do not set publication permissions. Use a separate definition metadata comment; `h`/`t` remain display-only flags. As with longhand metadata, later explicit publication declarations in the same metadata block are applied in order; avoid contradictory declarations.
+
+**Requires a build with private-shorthand support. Older builds ignore the short comment; use `%% publish: false %%` until the updated plugin and public projection CLI are installed together.** A public source Git repository still exposes private Markdown regardless of projection settings.
+
 ```markdown
 ## Public island
 %% publish: true %%

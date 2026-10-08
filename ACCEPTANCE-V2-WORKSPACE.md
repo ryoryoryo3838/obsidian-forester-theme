@@ -6,7 +6,7 @@ This records real execution for the default-on scope/input/sidebar replacement, 
 
 | Check | Result |
 |---|---|
-| Hybrid/parser/public/controller/input/sidebar regressions | 625 passed, 0 failed |
+| Hybrid/parser/public/controller/input/sidebar regressions | 641 passed, 0 failed |
 | Real controller/workspace integration through the public Obsidian API mock boundary | 24 passed, 0 failed |
 | Chromium computed-style/theme tests | 15 passed, 0 failed |
 | Retained legacy pure-module checks | 57 successful checks |
@@ -37,6 +37,12 @@ A subsequent live Obsidian report showed **“the plugin that created this pane 
 The factories now create closure-bound subclasses whose type/title/icon are valid during `super(leaf)`. A realistic base-constructor mock reproduced the same exception before the fix; all four identities pass afterward. Full regressions, production build and independent review also pass.
 
 The existing Backlinks pane was restored in the live app using the exact fixed sidebar module with native ItemView inheritance and the actual controller, replacing only that pane's factory **in memory**. Readback confirmed a real `data-forester-sidebar` and no removed-plugin message. Installed plugin files, other panes and note content were not changed by this temporary repair. This demonstrates the narrow constructor/Backlinks path; it does not establish full plugin reload/restart, all four native tab interactions, Mobile or production-freeze acceptance. Re-download the plugin assets to persist the source correction across restart.
+
+## Private shorthand acceptance
+
+The subtree definition metadata `%%p%%` is parsed as `publish: false` through the existing metadata path. Regression tests first reproduced both the missing privacy boundary and an unclosed short-comment boundary, then passed after the minimal parser correction. The dedicated 12-test file exercises inherited descendants, sibling boundaries, explicit public islands, LF/CRLF and whitespace/taxon placement, root/public-folder precedence, title-only permissions, link redaction and private-embed refusal, inert code/raw/math/quote examples, local display plans, settled-ID save/reparse and the real public CLI. The default test script includes this file; full regressions, TypeScript/build and Chromium/CodeMirror passed.
+
+No native Obsidian deployment/reload or site renderer/deployment is claimed for this shorthand. Existing release assets and installed plugin files are not changed by a branch-only source update. Old parsers ignore `%%p%%`; retain the longhand until the updated plugin and export CLI are used together.
 
 ## Scope and risks
 
