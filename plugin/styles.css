@@ -3,7 +3,8 @@
  *
  * Values are taken from `site/theme/style.css`; the comment on each group names
  * the selector they come from so the two can be diffed when the site changes.
- * Typography and palette live in the companion theme, not here.
+ * Page typography and palette live in the companion theme. Owned hybrid
+ * headings and metadata use Gothic independently of the active theme.
  */
 
 body.forester-enabled {
@@ -34,6 +35,20 @@ body.forester-enabled.theme-dark {
 .hybrid-metadata li { display: inline; }
 .hybrid-metadata li + li::before { content: " · "; }
 .hybrid-metadata address { display: inline; font-style: normal; }
+/* Only owned headings and metadata change font: prose and native UI stay intact.
+   CM tokens have their own native font rules, so style the token as well as its line. */
+.hybrid-metadata,
+.markdown-rendered .hybrid-metadata,
+.markdown-source-view.mod-cm6 .hybrid-metadata,
+.markdown-rendered .hybrid-tree-header :is(h1, h2),
+.markdown-rendered .hybrid-tree-body :is(h1, h2, h3, h4, h5, h6),
+.markdown-rendered :is(h1, h2, h3, h4, h5, h6)[data-hybrid-heading],
+.markdown-source-view.mod-cm6 .hybrid-tree-header :is(h1, h2),
+.markdown-source-view.mod-cm6 .hybrid-tree-body :is(h1, h2, h3, h4, h5, h6),
+.markdown-source-view.mod-cm6 .cm-line.hybrid-tree-heading,
+.markdown-source-view.mod-cm6 .cm-line.hybrid-tree-heading .cm-header {
+	font-family: "Inria Sans", "BIZ UDGothic", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", sans-serif;
+}
 .hybrid-tree-header h1, .hybrid-tree-header h2 { margin-block: .25em; }
 .hybrid-bibtex { white-space: pre-wrap; font-size: .85rem; }
 .hybrid-embed { border-inline-start: 2px solid var(--background-modifier-border); padding-inline-start: .75em; margin-block: .4em; }

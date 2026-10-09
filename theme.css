@@ -96,6 +96,16 @@
 	--font-monospace-theme: "UDEV Gothic 35NFLG", "PlemolJP35 Console NF",
 		ui-monospace, monospace;
 
+	/* Headings use proportional Latin + Japanese Gothic; prose stays Mincho.
+	   Obsidian applies these tokens to both Reading headings and CM header spans. */
+	--forester-heading-font: "Inria Sans", "BIZ UDGothic", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", sans-serif;
+	--h1-font: var(--forester-heading-font);
+	--h2-font: var(--forester-heading-font);
+	--h3-font: var(--forester-heading-font);
+	--h4-font: var(--forester-heading-font);
+	--h5-font: var(--forester-heading-font);
+	--h6-font: var(--forester-heading-font);
+
 	/* style.css: article>section>…>h1 { font-size:1.5em }, details h1 { 13pt } */
 	--h1-size: 1.5em;
 	--h2-size: 13pt;
@@ -416,7 +426,7 @@
 .markdown-rendered .hybrid-metadata,
 .markdown-source-view.mod-cm6 .hybrid-metadata {
 	color: var(--text-normal);
-	font-family: var(--font-text-theme);
+	font-family: "Inria Sans", "BIZ UDGothic", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", sans-serif;
 	font-size: 0.9em;
 }
 .markdown-rendered .hybrid-metadata ul,
