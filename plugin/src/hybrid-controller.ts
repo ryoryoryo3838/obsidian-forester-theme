@@ -214,10 +214,11 @@ export class HybridController {
       resolve: (target, path) => resolveHybrid(this.fieldIndex, target, path),
       renderEmbed: (el, target, flags, path) => this.renderEmbed(el, target, flags, path),
       open: (target, path) => this.open(target, path),
+      nativeEmbed: (target, path) => this.nativeAsset(target, path),
       backmatter: (document, state) => {
         const editor = state.field(editorInfoField, false)?.editor;
         const view = this.plugin.app.workspace.getLeavesOfType('markdown').map(leaf => leaf.view).find(view => view instanceof MarkdownView && view.editor === editor && view.file?.path === document.path) as MarkdownView | undefined;
-        return this.backmatterSnapshot(document, view, editor);
+        return this.backmatterSnapshot(this.parse(document.path, document.source), view, editor);
       },
       renderBackmatter: (el, document, snapshot) => this.renderDocumentBackmatter(el, document, snapshot),
     }), ViewPlugin.define(view => {
@@ -1037,8 +1038,8 @@ export class HybridController {
     el.append(a); return el;
   }
 
-  private bareIdentity(target: string, index: HybridIndex): boolean {
-    return !target.includes('#') && !target.includes('/') && !/\.md$/i.test(target) && index.ids.has(target.toLowerCase());
+  private bareIdentity(target: string, index: HybridIndex, path: string): boolean {
+    return !target.includes('#') && !target.includes('/') && !/\.md$/i.test(target) && index.ids.has(target.toLowerCase()) && !this.nativeAsset(target, path);
   }
 
   private idTargets(doc: HybridDocument, from: number, to: number, index: HybridIndex): Set<string> {
@@ -1048,7 +1049,7 @@ export class HybridController {
       if (doc.protectedRanges.some(r => r.from < links.lastIndex && r.to > m!.index)) continue;
       let start = m.index; while (start > 0 && doc.source[start - 1] === '\\') start--;
       if ((m.index - start) % 2) continue;
-      const target = m[2].split('|')[0]; if (this.bareIdentity(target, index)) targets.add(target);
+      const target = m[2].split('|')[0]; if (this.bareIdentity(target, index, doc.path)) targets.add(target);
     }
     return targets;
   }
@@ -1114,7 +1115,9 @@ export class HybridController {
   private sectionSource(doc: HybridDocument, tree: Pick<HybridTree, 'contentFrom' | 'to'>, index: HybridIndex): { source: string; slots: Map<string, DisplaySpan> } {
     const slots = new Map<string, DisplaySpan>();
     const plan = planDisplay(doc, [], target => resolveHybrid(index, target, doc.path));
-    const spans: DisplaySpan[] = plan.spans.filter(s => s.kind !== 'metadata');
+    // Native embeds must reach MarkdownRenderer verbatim: dimensions, aliases,
+    // fragments and source-relative spelling are Obsidian syntax, not tree slots.
+    const spans: DisplaySpan[] = plan.spans.filter(s => s.kind !== 'metadata' && (s.kind !== 'embed' || !this.nativeAsset(s.target ?? '', doc.path)));
     for (const node of doc.trees) for (const r of node.metadataRanges) spans.push({ ...r, kind: 'metadata' });
     spans.sort((a, b) => a.from - b.from || b.to - a.to);
     let cursor = tree.contentFrom, source = '';
@@ -1149,12 +1152,20 @@ export class HybridController {
     }
   }
 
+  private nativeAsset(target: string, path: string): boolean {
+    const linkpath = target.split('#')[0];
+    // The tree index contains Markdown only. Let Obsidian resolve basename and
+    // source-relative attachment paths before considering a colliding tree ID.
+    const asset = this.plugin.app.metadataCache.getFirstLinkpathDest?.(linkpath, path) ?? this.plugin.app.vault.getAbstractFileByPath(linkpath);
+    return asset instanceof TFile && asset.extension !== 'md';
+  }
+
   private nativeTarget(target: string, path: string, index: HybridIndex): boolean {
-    const base = resolveHybrid(index, target.split('#')[0] || path, path);
+    if (this.nativeAsset(target, path)) return true;
+    const linkpath = target.split('#')[0];
+    const base = resolveHybrid(index, linkpath || path, path);
     if (base.status === 'ambiguous') return false;
-    if (base.status === 'resolved' && !syntaxReady(base.document)) return true;
-    const asset = this.plugin.app.vault.getAbstractFileByPath(target.split('#')[0]);
-    return base.status === 'missing' && asset instanceof TFile && asset.extension !== 'md';
+    return base.status === 'resolved' && !syntaxReady(base.document);
   }
 
   private renderEmbed(el: HTMLElement, target: string, flags: EmbedFlags, path: string, parent: Component = this.plugin, index = this.overlays.get(path) ?? this.index,

@@ -15,6 +15,8 @@ export interface HybridEditorHost {
   resolve(target:string,path:string): HybridResolution;
   renderEmbed(el:HTMLElement,target:string,flags:EmbedFlags,path:string): (()=>void) | void;
   open(target:string,path:string): void;
+  /** Rendering ownership only; does not alter the canonical numbering plan. */
+  nativeEmbed?(target:string,path:string):boolean;
   backmatter?(document:HybridDocument,state:EditorState):EditorBackmatter | null;
   renderBackmatter?(el:HTMLElement,document:HybridDocument,snapshot:EditorBackmatter):(()=>void) | void;
 }
@@ -104,6 +106,7 @@ export function createHybridEditor(host:HybridEditorHost):Extension {
     }
     for(const span of plan.spans){
       if(span.to>state.doc.length||span.to<=span.from)continue;
+      if(span.kind==='embed'&&host.nativeEmbed?.(span.target??'',doc.path))continue;
       const spec=span.kind==='metadata'?{}:{widget:new HybridWidget(span,doc.path,host),block:span.kind==='embed'};
       ranges.push(Decoration.replace(spec).range(span.from,span.to));
     }

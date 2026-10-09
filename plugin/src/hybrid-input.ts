@@ -11,7 +11,7 @@ export type HybridInputHost = {
     to: { line: number; ch: number };
     before: string;
   }): Promise<void>;
-  /** Whether typing `[[` offers trees instead of Obsidian's file suggestions (default on). */
+  /** Whether typing `[[` offers trees alongside native file candidates (default on). */
   linkSuggest?(): boolean;
 };
 
@@ -238,12 +238,14 @@ class HybridSlashSuggest extends EditorSuggest<SlashChoice> {
   }
 }
 
-interface LinkChoice { tree: HybridTree; source: string; embed: boolean; capture: InputCapture; }
+type LinkChoice =
+  | { kind: 'tree'; tree: HybridTree; source: string; embed: boolean; capture: InputCapture }
+  | { kind: 'file'; file: TFile; path: string; linktext: string; embed: boolean; capture: InputCapture };
 // `[[query` or `![[query` up to the caret. `|`, `#` and `^` hand the link back to Obsidian
 // (alias, heading or block references are written by hand).
 const wikilinkTrigger = /(!?)\[\[([^[\]|#^\r\n]*)$/;
 
-/** `[[` in an enabled document suggests trees and inserts the same link as "Insert tree link". */
+/** `[[` suggests semantic trees plus native files; only trees use host minting/CAS. */
 class HybridWikilinkSuggest extends EditorSuggest<LinkChoice> {
   constructor(private support: InputSupport) { super(support.plugin.app); }
   onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
@@ -259,24 +261,52 @@ class HybridWikilinkSuggest extends EditorSuggest<LinkChoice> {
     return { start, end, query: match[2] };
   }
   getSuggestions(context: EditorSuggestContext): LinkChoice[] {
+    if (this.support.host.linkSuggest?.() === false) return [];
     const { editor, file, start, end, query } = context;
     const text = editor.getRange(start, end);
     const match = /^(!?)\[\[/.exec(text);
     if (!match || !text.slice(match[0].length).startsWith(query)) return [];
+    const cursor = { line: start.line, ch: start.ch + match[0].length + query.length };
+    if (!samePosition(editor.getCursor('from'), cursor) || !samePosition(editor.getCursor('to'), cursor)) return [];
     const capture = this.support.capture(editor, file, start, end);
     if (!capture) return [];
     const index = this.support.host.index();
-    return filterHybridTrees(index, query)
+    const embed = match[1] === '!';
+    const choices: LinkChoice[] = filterHybridTrees(index, query)
       .filter(tree => this.support.resolveCandidate(index, tree, capture.path) !== null)
-      .map(tree => ({ tree, source: index.documents.get(tree.path)!.source, embed: match[1] === '!', capture }));
+      .map(tree => ({ kind: 'tree', tree, source: index.documents.get(tree.path)!.source, embed, capture }));
+    const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    // Native files are metadata-only candidates: never read or mint attachments.
+    // Enabled Markdown roots already have their semantic tree choice above.
+    for (const target of this.support.plugin.app.vault.getFiles()) {
+      if (target.extension.toLowerCase() === 'md' && index.documents.get(target.path)?.enabled) continue;
+      const fields = [target.basename, target.path].map(field => field.toLowerCase());
+      if (!words.every(word => fields.some(field => field.includes(word)))) continue;
+      const linktext = this.support.plugin.app.metadataCache.fileToLinktext(target, capture.path);
+      choices.push({ kind: 'file', file: target, path: target.path, linktext, embed, capture });
+    }
+    return choices;
   }
   renderSuggestion(choice: LinkChoice, el: HTMLElement): void {
+    if (choice.kind === 'file') { el.textContent = choice.file.path; return; }
     const { tree } = choice;
     el.textContent = `${tree.meta.title || '(untitled)'} · ${tree.id ?? 'ID on insertion'} · ${tree.path}`;
   }
   selectSuggestion(choice: LinkChoice): void {
-    if (!this.context || !this.support.valid(choice.capture)) return;
+    if (!this.context || this.support.host.linkSuggest?.() === false || !this.support.valid(choice.capture)) return;
     this.close();
+    if (choice.kind === 'file') {
+      const { editor, replacement } = choice.capture;
+      const app = this.support.plugin.app;
+      if (choice.file.path !== choice.path || app.vault.getAbstractFileByPath(choice.path) !== choice.file) return;
+      const linktext = app.metadataCache.fileToLinktext(choice.file, choice.capture.path);
+      if (linktext !== choice.linktext || this.support.host.linkSuggest?.() === false || !this.support.valid(choice.capture)) return;
+      const literal = `${choice.embed ? '!' : ''}[[${linktext}]]`;
+      const start = editor.posToOffset(replacement.from);
+      editor.replaceRange(literal, replacement.from, replacement.to);
+      editor.setCursor(editor.offsetToPos(start + literal.length));
+      return;
+    }
     const index = this.support.host.index(), document = index.documents.get(choice.tree.path);
     if (!document?.enabled || document.source !== choice.source) return;
     const tree = document.trees.find(candidate => candidate.key === choice.tree.key && candidate.id === choice.tree.id);

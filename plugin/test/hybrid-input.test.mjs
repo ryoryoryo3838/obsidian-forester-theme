@@ -78,6 +78,7 @@ function harness(entries = { 'Source.md': optin('Text ') }, activePath = 'Source
   const app = { workspace, vault: {
     getAbstractFileByPath: path => files.get(path) ?? null,
     getFileByPath: path => files.get(path) ?? null,
+    getFiles: () => [...files.values()],
     read() { throw new Error('Input must not read the vault'); },
     cachedRead() { throw new Error('Input must not read the vault'); },
     getMarkdownFiles() { throw new Error('Input must not enumerate the vault'); },
