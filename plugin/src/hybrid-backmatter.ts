@@ -44,6 +44,7 @@ export function renderBackmatter(container: HTMLElement, groups: BackmatterGroup
     for (const tree of groups[key]) {
       const details = dom.createElement('details');
       details.className = 'hybrid-backmatter-item';
+      if (tree.meta.taxon) details.setAttribute('data-taxon', tree.meta.taxon);
       const summary = dom.createElement('summary');
       if (tree.meta.taxon) {
         const taxon = dom.createElement('span');
@@ -78,7 +79,7 @@ export function renderBackmatter(container: HTMLElement, groups: BackmatterGroup
         open: (target, path) => safely(() => host.open(target, path)),
         register: cleanup => cleanups.push(cleanup),
       });
-      if (metadata) details.append(metadata);
+      if (metadata) summary.append(metadata);
       let rendered = false;
       const toggle = () => {
         if (!alive || !details.open || rendered) return;

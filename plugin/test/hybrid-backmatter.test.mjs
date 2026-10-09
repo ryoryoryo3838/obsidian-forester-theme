@@ -75,6 +75,7 @@ test('each result is closed, safely titled, unnumbered and exposes native metada
   const details = h.container.querySelector('details.hybrid-backmatter-item');
   assert.ok(details);
   assert.equal(details.hasAttribute('open'), false);
+  assert.equal(details.getAttribute('data-taxon'), 'Claim', 'footer exposes the semantic taxon for native appearance rules');
   const summary = details.querySelector('summary');
   assert.ok(summary);
   assert.equal(summary.querySelector('.hybrid-backmatter-title').textContent, value.meta.title);
@@ -82,6 +83,7 @@ test('each result is closed, safely titled, unnumbered and exposes native metada
   assert.equal(summary.textContent.includes('9.7'), false, 'no document-context numbering');
   assert.equal(summary.querySelector('img'), null);
   assert.match(details.querySelector('.hybrid-metadata').textContent, /October 4, 2026.*Alice/);
+  assert.equal(summary.contains(details.querySelector('.hybrid-metadata')), true, 'metadata stays in the visible header while the body is collapsed');
   assert.deepEqual(h.calls.bodies, [], 'closed results never activate a Markdown component');
   h.cleanup();
 });
