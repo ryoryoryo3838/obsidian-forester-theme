@@ -5,7 +5,10 @@ import type { HybridDocument, HybridIndex, HybridResolution, HybridTree } from '
 /** I/O, ID minting and post-await editor/disk CAS belong to the controller. */
 export type HybridInputHost = {
   index(): HybridIndex;
-  resolve(target: string, path: string): HybridResolution;
+  resolve(target: string, path: string, index?: HybridIndex): HybridResolution;
+  /** Canonical publications, not draft overlays, prepare reusable search facts. */
+  searchIndex?(): HybridIndex;
+  subscribeSearch?(update: () => void): () => void;
   insertTarget(editor: Editor, file: TFile, tree: HybridTree, embed: boolean, replacement?: {
     from: { line: number; ch: number };
     to: { line: number; ch: number };
@@ -41,12 +44,25 @@ interface TreeChoice { tree: HybridTree; source: string; }
 const slashCommands: SlashCommand[] = ['subtree', 'transclude', 'link'];
 const samePosition = (a: EditorPosition, b: EditorPosition): boolean => a.line === b.line && a.ch === b.ch;
 
+const suggestionLimit = 100;
+type SearchTree = { tree: HybridTree; source: string; fields: string[] };
+type SearchFile = { file: TFile; path: string; fields: string[] };
+const searchWords = (query: string): string[] => query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+const matchesWords = (fields: string[], words: string[]): boolean => words.every(word => fields.some(field => field.includes(word)));
+
 class InputSupport {
   private drafts = new WeakMap<Editor, HybridDocument>();
   private editorVersions = new WeakMap<Editor, number>();
   private bindingVersion = 0;
   private binding: { editor: Editor; file: TFile; path: string } | null = null;
   private alive = true;
+  private catalog = new Map<string, { document: HybridDocument; facts: SearchTree[] }>();
+  private nativeCatalog = new Map<string, SearchFile>();
+  private nativePreparation: Promise<void>;
+  private preparationIndex?: HybridIndex;
+  private preparation?: Promise<void>;
+  private searchGeneration = 0;
+  private searchTimer?: ReturnType<typeof setTimeout>;
   readonly pickers = new Set<HybridTreePicker>();
 
   constructor(readonly plugin: Plugin, readonly host: HybridInputHost) {
@@ -60,9 +76,105 @@ class InputSupport {
     plugin.registerEvent(workspace.on('file-open', () => this.syncBinding()));
     plugin.register(() => {
       this.alive = false;
+      this.searchGeneration++;
+      if (this.searchTimer !== undefined) clearTimeout(this.searchTimer);
+      this.catalog.clear(); this.nativeCatalog.clear();
       for (const picker of [...this.pickers]) picker.close();
       this.pickers.clear();
     });
+    // Subscribe before taking the inventory so events during bootstrap cannot
+    // be lost or rolled back by the late normalization of snapshot objects.
+    const vault = plugin.app.vault;
+    if (typeof vault.on === 'function') {
+      plugin.registerEvent(vault.on('create', file => { if ('extension' in file && this.alive) this.rememberFile(file as TFile); }));
+      plugin.registerEvent(vault.on('delete', file => { this.nativeCatalog.delete(file.path); }));
+      plugin.registerEvent(vault.on('rename', (file, oldPath) => {
+        this.nativeCatalog.delete(oldPath);
+        if ('extension' in file && this.alive) this.rememberFile(file as TFile);
+      }));
+    }
+    this.nativePreparation = this.buildNativeSearch(vault.getFiles());
+    if (host.subscribeSearch) plugin.register(host.subscribeSearch(() => {
+      if (!this.alive) return;
+      // Invalidate immediately: a yielded old build may resume before the
+      // coalesced replacement timer and must not publish obsolete facts.
+      this.searchGeneration++;
+      this.preparationIndex = undefined;
+      if (this.searchTimer !== undefined) return;
+      this.searchTimer = setTimeout(() => { this.searchTimer = undefined; void this.prepareSearch(); }, 0);
+    }));
+    void this.prepareSearch();
+  }
+
+  private rememberFile(file: TFile): void {
+    this.nativeCatalog.set(file.path, { file, path: file.path, fields: [file.basename, file.path].map(field => field.toLowerCase()) });
+  }
+
+  private async buildNativeSearch(files: TFile[]): Promise<void> {
+    let work = 0, began = performance.now();
+    for (const file of files) {
+      if (!this.alive) return;
+      // Objects can be deleted, replaced or renamed while we yield. Normalize
+      // their latest metadata only when the path still identifies this object.
+      if (this.plugin.app.vault.getAbstractFileByPath(file.path) === file) this.rememberFile(file);
+      if (++work >= 128 || performance.now() - began >= 8) {
+        await new Promise<void>(resolve => setTimeout(resolve, 0)); work = 0; began = performance.now();
+      }
+    }
+  }
+
+  /** Differential, cooperative and generation-gated canonical preparation. */
+  prepareSearch(): Promise<void> {
+    if (!this.alive) return Promise.resolve();
+    const index = this.host.searchIndex?.() ?? this.host.index();
+    if (this.preparationIndex === index && this.preparation) return this.preparation;
+    if (this.searchTimer !== undefined) { clearTimeout(this.searchTimer); this.searchTimer = undefined; }
+    this.preparationIndex = index;
+    this.preparation = Promise.all([this.nativePreparation, this.buildSearch(index, ++this.searchGeneration)]).then(() => undefined);
+    return this.preparation;
+  }
+
+  private async buildSearch(index: HybridIndex, generation: number): Promise<void> {
+    const next = new Map<string, { document: HybridDocument; facts: SearchTree[] }>();
+    let work = 0, began = performance.now();
+    for (const document of index.documents.values()) {
+      if (!this.alive || generation !== this.searchGeneration) return;
+      const previous = this.catalog.get(document.path);
+      if (previous?.document === document) next.set(document.path, previous);
+      else {
+        const facts: SearchTree[] = [];
+        if (document.enabled) for (const tree of document.trees) {
+          facts.push({ tree, source: document.source, fields: [tree.id ?? '', tree.meta.title, tree.path].map(field => field.toLowerCase()) });
+          if (++work >= 128 || performance.now() - began >= 8) {
+            await new Promise<void>(resolve => setTimeout(resolve, 0)); work = 0; began = performance.now();
+            if (!this.alive || generation !== this.searchGeneration) return;
+          }
+        }
+        next.set(document.path, { document, facts });
+      }
+      if (++work >= 128 || performance.now() - began >= 8) {
+        await new Promise<void>(resolve => setTimeout(resolve, 0)); work = 0; began = performance.now();
+      }
+    }
+    if (this.alive && generation === this.searchGeneration) this.catalog = next;
+  }
+
+  *searchTrees(index: HybridIndex, query: string, path: string): Generator<SearchTree> {
+    const words = searchWords(query);
+    let attempts = 0;
+    for (const { facts } of this.catalog.values()) for (const fact of facts) {
+      if (!matchesWords(fact.fields, words) || index.documents.get(fact.tree.path)?.source !== fact.source) continue;
+      if (attempts++ >= suggestionLimit) return;
+      if (this.resolveCandidate(index, fact.tree, path)) yield fact;
+    }
+  }
+
+  *searchFiles(index: HybridIndex, query: string): Generator<SearchFile> {
+    const words = searchWords(query);
+    for (const fact of this.nativeCatalog.values()) {
+      if (fact.file.extension.toLowerCase() === 'md' && index.documents.get(fact.path)?.enabled) continue;
+      if (matchesWords(fact.fields, words)) yield fact;
+    }
   }
 
   private syncBinding(): void {
@@ -143,7 +255,7 @@ class InputSupport {
       if (!heading) return null;
       target = `${tree.path}#${heading}`;
     }
-    const resolved = this.host.resolve(target, fromPath);
+    const resolved = this.host.resolve(target, fromPath, index);
     return resolved.status === 'resolved' && resolved.document.enabled && resolved.document.path === tree.path && resolved.tree.key === tree.key && resolved.tree.path === tree.path ? tree : null;
   }
 
@@ -170,7 +282,12 @@ class HybridTreePicker extends SuggestModal<TreeChoice> {
   getSuggestions(query: string): TreeChoice[] {
     if (this.hasClosed || !this.support.valid(this.capture)) return [];
     const index = this.support.host.index();
-    return filterHybridTrees(index, query).filter(tree => this.support.resolveCandidate(index, tree, this.capture.path) !== null).map(tree => ({ tree, source: index.documents.get(tree.path)!.source }));
+    const choices: TreeChoice[] = [];
+    for (const fact of this.support.searchTrees(index, query, this.capture.path)) {
+      choices.push({ tree: fact.tree, source: fact.source });
+      if (choices.length >= suggestionLimit) break;
+    }
+    return choices;
   }
   renderSuggestion(choice: TreeChoice, el: HTMLElement): void {
     const { tree } = choice;
@@ -272,18 +389,24 @@ class HybridWikilinkSuggest extends EditorSuggest<LinkChoice> {
     if (!capture) return [];
     const index = this.support.host.index();
     const embed = match[1] === '!';
-    const choices: LinkChoice[] = filterHybridTrees(index, query)
-      .filter(tree => this.support.resolveCandidate(index, tree, capture.path) !== null)
-      .map(tree => ({ kind: 'tree', tree, source: index.documents.get(tree.path)!.source, embed, capture }));
-    const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    // Native files are metadata-only candidates: never read or mint attachments.
-    // Enabled Markdown roots already have their semantic tree choice above.
-    for (const target of this.support.plugin.app.vault.getFiles()) {
-      if (target.extension.toLowerCase() === 'md' && index.documents.get(target.path)?.enabled) continue;
-      const fields = [target.basename, target.path].map(field => field.toLowerCase());
-      if (!words.every(word => fields.some(field => field.includes(word)))) continue;
-      const linktext = this.support.plugin.app.metadataCache.fileToLinktext(target, capture.path);
-      choices.push({ kind: 'file', file: target, path: target.path, linktext, embed, capture });
+    const choices: LinkChoice[] = [];
+    const trees = this.support.searchTrees(index, query, capture.path);
+    const files = this.support.searchFiles(index, query);
+    let treesDone = false, filesDone = false;
+    // Balanced prepared lanes, with spare capacity available to either lane.
+    while (choices.length < suggestionLimit && (!treesDone || !filesDone)) {
+      if (!treesDone) {
+        const next = trees.next(); treesDone = !!next.done;
+        if (!next.done) choices.push({ kind: 'tree', tree: next.value.tree, source: next.value.source, embed, capture });
+      }
+      if (!filesDone && choices.length < suggestionLimit) {
+        const next = files.next(); filesDone = !!next.done;
+        if (!next.done) {
+          const { file: target, path } = next.value;
+          const linktext = this.support.plugin.app.metadataCache.fileToLinktext(target, capture.path);
+          choices.push({ kind: 'file', file: target, path, linktext, embed, capture });
+        }
+      }
     }
     return choices;
   }
@@ -331,7 +454,7 @@ function preferSuggest(plugin: Plugin, suggest: EditorSuggest<unknown>): void {
 }
 
 /** Register input support only; importing this module never changes editors. */
-export function registerHybridInput(plugin: Plugin, host: HybridInputHost): void {
+export function registerHybridInput(plugin: Plugin, host: HybridInputHost): { prepareSearch(): Promise<void> } {
   const support = new InputSupport(plugin, host);
   const suggest = new HybridSlashSuggest(support);
   plugin.registerEditorSuggest(suggest);
@@ -350,4 +473,5 @@ export function registerHybridInput(plugin: Plugin, host: HybridInputHost): void
       if (capture) support.run(command, capture);
     } });
   }
+  return { prepareSearch: () => support.prepareSearch() };
 }

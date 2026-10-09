@@ -111,6 +111,7 @@ export function createHarness(entries = {}, options = { folders: [], publicFolde
   resetObservations();
   const vault = new Events(); vault.files = new Map(); vault.data = new Map(Object.entries(entries)); vault.reads = []; vault.processes = [];
   for (const path of vault.data.keys()) vault.files.set(path, new TFile(path));
+  vault.getFiles = () => [...vault.files.values()];
   vault.getMarkdownFiles = () => [...vault.files.values()].filter(f => f.extension === 'md');
   vault.getAbstractFileByPath = path => vault.files.get(path) ?? null;
   vault.read = async file => { vault.reads.push(file.path); if (!vault.data.has(file.path)) throw new Error(`Missing ${file.path}`); return vault.data.get(file.path); };

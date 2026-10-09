@@ -77,6 +77,7 @@ export class HybridController {
   private relationIndex?: HybridIndex;
   private relationGraph?: ReturnType<typeof createTreeRelations>;
   private listeners = new Set<() => void>();
+  private searchListeners = new Set<() => void>();
   private listenerTimer?: ReturnType<typeof setTimeout>;
   private treePages = new WeakMap<MarkdownView, { path: string; key: string; id?: string }>();
   private settled = new Map<Editor, ReturnType<typeof setTimeout>>();
@@ -146,7 +147,7 @@ export class HybridController {
       for (const entry of this.readingBackmatter.values()) entry.cleanup();
       this.readingBackmatter.clear(); this.backmatterGraphs = new WeakMap();
       if (this.listenerTimer !== undefined) clearTimeout(this.listenerTimer);
-      this.listeners.clear(); this.lastMarkdown = undefined; this.relationIndex = undefined; this.relationGraph = undefined;
+      this.listeners.clear(); this.searchListeners.clear(); this.lastMarkdown = undefined; this.relationIndex = undefined; this.relationGraph = undefined;
       this.refreshRequested = false;
       for (const timer of this.settled.values()) clearTimeout(timer);
       for (const cleanup of this.viewCleanups) cleanup();
@@ -255,11 +256,12 @@ export class HybridController {
       pre.append(code); el.append(pre);
     });
     this.markdownView();
-    registerHybridInput(this.plugin, { index: () => this.currentIndex(), resolve: (target, path) => resolveHybrid(this.currentIndex(), target, path), insertTarget: (editor, file, tree, embed, replacement) => this.insertTarget(editor, file, tree, embed, replacement), linkSuggest: () => this.linkSuggest() });
+    const input = registerHybridInput(this.plugin, { index: () => this.currentIndex(), searchIndex: () => this.index, subscribeSearch: update => { this.searchListeners.add(update); return () => this.searchListeners.delete(update); }, resolve: (target, path, index) => resolveHybrid(index ?? this.currentIndex(), target, path), insertTarget: (editor, file, tree, embed, replacement) => this.insertTarget(editor, file, tree, embed, replacement), linkSuggest: () => this.linkSuggest() });
     registerHybridSidebar(this.plugin, { current: () => this.current(), outline: (document, tree) => this.outline(document, tree), relations: tree => this.relations(tree), openTree: (tree, newLeaf) => this.openTree(tree, newLeaf), focusOccurrence: entry => this.focusOccurrence(entry), subscribe: update => this.subscribe(update) });
     this.plugin.addCommand({ id: 'check-hybrid-trees', name: 'Check hybrid trees', callback: () => this.checkTrees() });
     this.plugin.addCommand({ id: 'preview-public-projection', name: 'Preview public projection (local only)', callback: () => this.previewPublic() });
     await this.refresh();
+    await input.prepareSearch();
   }
 
   refresh(): Promise<void> {
@@ -345,7 +347,10 @@ export class HybridController {
       this.warn(this.index.diagnostics.filter(d => ['duplicate-id', 'file-id-collision', 'alias-id-collision', 'invalid-id', 'invalid-metadata', 'invalid-frontmatter'].includes(d.code)));
     }
     this.refreshViews(previous);
-    if (previous !== this.index) this.notify();
+    if (previous !== this.index) {
+      for (const update of this.searchListeners) update();
+      this.notify();
+    }
   }
 
   private refreshViews(previous: HybridIndex): void {

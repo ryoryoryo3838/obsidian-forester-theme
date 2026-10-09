@@ -92,9 +92,9 @@ function harness(entries = { 'Source.md': optin('Text ') }, activePath = 'Source
   };
   const h = { plugin, host, calls, resolutions, files, workspace,
     index() { return index; },
-    reindex(next) { index = makeIndex(next); for (const path of Object.keys(next)) if (!files.has(path)) files.set(path, { path, extension: 'md' }); },
+    reindex(next) { index = makeIndex(next); for (const path of Object.keys(next)) if (!files.has(path)) files.set(path, { path, extension: 'md' }); void h.input?.prepareSearch(); },
     open(path, source = entries[path]) { const info = { file: files.get(path), editor: new Editor(source) }; workspace.activeEditor = info; return info; },
-    register() { assert.equal(typeof input.registerHybridInput, 'function', 'actual input registration is exported'); input.registerHybridInput(plugin, host); return plugin.suggests[0]; },
+    register() { assert.equal(typeof input.registerHybridInput, 'function', 'actual input registration is exported'); h.input = input.registerHybridInput(plugin, host); return plugin.suggests[0]; },
     trigger() { const { file, editor } = workspace.activeEditor; const suggest = plugin.suggests[0]; const trigger = suggest.onTrigger(editor.getCursor(), editor, file); if (!trigger) return null; suggest.context = { ...trigger, file, editor }; return suggest.context; },
     async slash(command) { const context = h.trigger(); assert.ok(context, 'slash triggers in current editor'); const rows = await plugin.suggests[0].getSuggestions(context); const row = rows.find(r => r.command === command); assert.ok(row, `/${command} suggestion is available`); return plugin.suggests[0].selectSuggestion(row, {}); },
   };
