@@ -1,8 +1,9 @@
-import {readdir,readFile,mkdir,writeFile,rename,rm,lstat,realpath} from 'node:fs/promises';
+import {readdir,readFile,mkdir,writeFile,rename,rm,lstat,realpath,readlink} from 'node:fs/promises';
 import {resolve,join,relative,dirname,basename,isAbsolute,sep} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {parseHybrid,indexHybrid} from '../src/hybrid-core';
 import {projectPublic} from '../src/hybrid-public';
+import {projectPublicForest} from '../src/hybrid-public-forest';
 import {hybridOptions} from '../src/hybrid-config';
 
 function inside(root:string,path:string):boolean{
@@ -28,6 +29,22 @@ async function canonicalOutput(out:string,vault:string):Promise<string>{
  }
  const canonicalAncestor=await realpath(ancestor);
  if(!(await lstat(canonicalAncestor)).isDirectory())throw new Error('Output parent must be a directory');
+ // A symlink can name a source path whose own symlink escapes back outside.
+ // Inspect target spellings and their ancestors, not only the final realpath.
+ const inspected=new Set<string>();
+ const inspectAliases=async(path:string,depth=0):Promise<void>=>{
+  if(depth>64)throw new Error('Output alias limit');
+  for(let parent=path;;parent=dirname(parent)){
+   if(inside(vault,parent))throw new Error('Output must be outside the source vault');
+   if(!inspected.has(parent)){
+    inspected.add(parent);
+    const info=await lstat(parent);
+    if(info.isSymbolicLink())await inspectAliases(resolve(dirname(parent),await readlink(parent)),depth+1);
+   }
+   if(dirname(parent)===parent)break;
+  }
+ };
+ await inspectAliases(ancestor);
  // Inspect every existing ancestor: entering the vault and then escaping it
  // through another symlink is still a source namespace and is forbidden.
  for(let parent=ancestor;;parent=dirname(parent)){
@@ -41,10 +58,12 @@ async function canonicalOutput(out:string,vault:string):Promise<string>{
 
 /** Read-only vault traversal, no symlink following, no build/eval/network side effects. */
 async function main():Promise<void>{
- const args=process.argv.slice(2),allowed=new Set(['--vault','--out','--config']);
+ const args=process.argv.slice(2),allowed=new Set(['--vault','--out','--config','--format']);
  const values=new Map<string,string>();
  for(let i=0;i<args.length;i+=2){if(!allowed.has(args[i])||!args[i+1]||values.has(args[i]))throw new Error('Usage: project-public --vault PATH --out OUTPUT.json [--config CONFIG.json]');values.set(args[i],args[i+1]);}
  if(!values.has('--vault')||!values.has('--out'))throw new Error('Both --vault and --out are required');
+ if(values.has('--format')&&values.get('--format')!=='forest')throw new Error('Unsupported output format');
+ const forestFormat=values.get('--format')==='forest';
  const lexicalVault=resolve(values.get('--vault')!),vault=await realpath(lexicalVault),requestedOut=resolve(values.get('--out')!);
  if(!requestedOut.endsWith('.json'))throw new Error('Output must be a .json artifact');
  if(inside(lexicalVault,requestedOut)||inside(vault,requestedOut))throw new Error('Output must be outside the source vault');
@@ -65,17 +84,20 @@ async function main():Promise<void>{
  await walk(vault);paths.sort();
  const docs=[];
  for(const path of paths)docs.push(parseHybrid(relative(vault,path).split('\\').join('/'),await readFile(path,'utf8'),options));
- const projection=projectPublic(indexHybrid(docs));
+ const index=indexHybrid(docs);
+ const structured=forestFormat?projectPublicForest(index):undefined;
+ const projection=structured?{trees:structured.forest.trees,diagnostics:structured.diagnostics}:projectPublic(index);
  if(projection.diagnostics.some(d=>d.severity==='error')){
   // Projection diagnostics are intentionally source-free. Never echo YAML errors or private paths.
-  process.stderr.write(JSON.stringify({status:'blocked',diagnostics:projection.diagnostics})+'\n');process.exitCode=1;return;
+  const failure=forestFormat?{status:'blocked',codes:[...new Set(projection.diagnostics.map(d=>d.code))].sort(),count:projection.diagnostics.length}:{status:'blocked',diagnostics:projection.diagnostics};
+  process.stderr.write(JSON.stringify(failure)+'\n');process.exitCode=1;return;
  }
  // Pin writes to the validated canonical namespace, never the caller's parent aliases.
  if(await canonicalOutput(out,vault)!==out)throw new Error('Output namespace changed');
  await mkdir(dirname(out),{recursive:true});
  if(await canonicalOutput(out,vault)!==out)throw new Error('Output namespace changed');
  const temporary=out+'.'+randomUUID()+'.tmp';
- try{await writeFile(temporary,JSON.stringify({format:'forester-public-v1',trees:projection.trees},null,2)+'\n',{flag:'wx',mode:0o600});await rename(temporary,out);}finally{await rm(temporary,{force:true});}
+ try{await writeFile(temporary,JSON.stringify(structured?structured.forest:{format:'forester-public-v1',trees:projection.trees},null,2)+'\n',{flag:'wx',mode:0o600});await rename(temporary,out);}finally{await rm(temporary,{force:true});}
  process.stdout.write(JSON.stringify({status:'ok',publicTrees:projection.trees.length})+'\n');
 }
-main().catch(()=>{process.stderr.write('Public projection failed. Check local input/configuration; no private source details are emitted.\n');process.exitCode=1;});
+main().catch(()=>{process.stderr.write(process.argv.includes('--format')?JSON.stringify({status:'blocked',codes:['projection-failed'],count:1})+'\n':'Public projection failed. Check local input/configuration; no private source details are emitted.\n');process.exitCode=1;});

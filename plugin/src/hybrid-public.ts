@@ -2,7 +2,7 @@ import type { HybridDiagnostic, HybridDocument, HybridIndex, HybridTree, PublicP
 import { inlineCodeEnd, resolveHybrid } from './hybrid-core';
 import { decodeWikilinkLabel, encodeWikilinkLabel } from './hybrid-literal-label';
 
-function error(code: string, message: string): HybridDiagnostic {
+export function error(code: string, message: string): HybridDiagnostic {
   return { code, message, path: '', severity: 'error' };
 }
 
@@ -32,13 +32,14 @@ function escapedAt(text: string, offset: number): boolean {
 }
 
 /** Literal code is retained, never evaluated. Comments are stripped before validating live text. */
-function markdown(text: string, live: (text: string) => string): string {
+export function markdown(text: string, live: (text: string) => string,
+  options: { literal?: (text: string) => string; comment?: (text: string, offset: number) => string } = {}): string {
   let result = '';
   let pending = '';
   let cursor = 0;
   let listContext = false;
   const literal = (end: number) => {
-    result += live(pending) + text.slice(cursor, end);
+    result += live(pending) + (options.literal ? options.literal(text.slice(cursor, end)) : text.slice(cursor, end));
     pending = '';
     cursor = end;
   };
@@ -70,6 +71,7 @@ function markdown(text: string, live: (text: string) => string): string {
     const comment = text.startsWith('<!--', cursor) ? ['<!--', '-->'] : text.startsWith('%%', cursor) ? ['%%', '%%'] : undefined;
     if (comment) {
       const end = text.indexOf(comment[1], cursor + comment[0].length);
+      if (end >= 0 && options.comment) pending += options.comment(text.slice(cursor, end + comment[1].length), cursor);
       cursor = end < 0 ? text.length : end + comment[1].length;
       continue;
     }
@@ -91,7 +93,7 @@ function plainText(value: string): string {
 }
 
 /** Explicit declarations belong to their tree; unknown same-value inheritance stays conservative. */
-function publicBibliography(document: HybridDocument, tree: HybridTree): Pick<PublicTree, 'citationAuthors' | 'publicationYear'> {
+export function publicBibliography(document: HybridDocument, tree: HybridTree): Pick<PublicTree, 'citationAuthors' | 'publicationYear'> {
   const byKey = new Map(document.trees.map(node => [node.key, node]));
   const visibleOrigin = (author?: string): boolean => {
     let current = tree;
@@ -112,7 +114,7 @@ function publicBibliography(document: HybridDocument, tree: HybridTree): Pick<Pu
     ...(tree.meta.publicationYear !== undefined && visibleOrigin() ? { publicationYear: tree.meta.publicationYear } : {}) };
 }
 
-function safeExternalUrl(value: string): boolean {
+export function safeExternalUrl(value: string): boolean {
   if (/[\s\\<>\u0000-\u001f\u007f]/.test(value)) return false;
   try {
     const url = new URL(value);
@@ -125,7 +127,7 @@ function safeExternalUrl(value: string): boolean {
 /** Only explicit safe schemes are accepted; entities/encoded schemes do not gain permission. */
 const INLINE_LINK = /\[([^\]\n]*)\]\(\s*(<[^>\n]*>|[^)\s]*)(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'))?[ \t]*\)/g;
 const REFERENCES = /\{ref:\s*\[\[([^\]\n]+)\]\]\s*\}|(!?)\[\[([^\]\n]+)\]\]/g;
-const LINKS = new RegExp(`${REFERENCES.source}|${INLINE_LINK.source}`, 'g');
+export const LINKS = new RegExp(`${REFERENCES.source}|${INLINE_LINK.source}`, 'g');
 
 function localDestination(value: string): boolean {
   return !!value && !/[:%&\\<>\u0000-\u001f\u007f]/.test(value);
@@ -150,7 +152,7 @@ function inspectUrls(active: string, diagnostics: HybridDiagnostic[]): string {
       (_literal, destination: string) => { check(destination); return ''; });
 }
 
-function referenceText(document: HybridDocument, index: HybridIndex, diagnostics: HybridDiagnostic[],
+export function referenceText(document: HybridDocument, index: HybridIndex, diagnostics: HybridDiagnostic[],
   stack: string[], reference: string, embed = false, citation = false, budget = { remaining: 1024 }): string {
   const [destination, label] = reference.split('|');
   if (/\.[A-Za-z0-9]+(?:#.*)?$/.test(destination) && !/\.md(?:#.*)?$/i.test(destination)) {
@@ -207,7 +209,7 @@ function referenceText(document: HybridDocument, index: HybridIndex, diagnostics
   return target.id ? `[[${target.id}|${literalLabel}]]` : literalLabel;
 }
 
-function safeLive(active: string, diagnostics: HybridDiagnostic[]): boolean {
+export function safeLive(active: string, diagnostics: HybridDiagnostic[]): boolean {
   if (/\\\{|\\[A-Za-z][A-Za-z0-9-]*\s*\{/.test(active)) {
     diagnostics.push(error('unsupported-raw', '生Forester式の安全な公開は未対応です。'));
     return false;
@@ -274,27 +276,34 @@ function validIndex(index: HybridIndex): boolean {
   return true;
 }
 
-/** Pure, fail-closed public projection. String metadata is plain text, not executable Markdown. */
-export function projectPublic(index: HybridIndex): PublicProjection {
+/** Shared source authorization and index consistency, never payload-bearing diagnostics. */
+export function publicIndexDiagnostics(index: HybridIndex): HybridDiagnostic[] {
   // The parser partitions lines on LF; bare CR can hide private subtree metadata.
   // Preflight every source, including private/disabled reference and alias targets.
   if ([...index.documents.values()].some(document => /\r(?!\n)/.test(document.source))) {
-    return { trees: [], diagnostics: [error('unsupported-line-ending', '未対応の改行を含む入力は公開できません。')] };
+    return [error('unsupported-line-ending', '未対応の改行を含む入力は公開できません。')];
   }
   if (index.diagnostics.some(item => item.severity === 'error') ||
       [...index.documents.values()].some(document => document.diagnostics.some(item => item.severity === 'error'))) {
-    return { trees: [], diagnostics: [error('invalid-source', '入力にエラーがあるため公開できません。')] };
+    return [error('invalid-source', '入力にエラーがあるため公開できません。')];
   }
   if ([...index.ids.values()].some(targets => targets.length > 1)) {
-    return { trees: [], diagnostics: [error('id-collision', 'IDの衝突があるため公開できません。')] };
+    return [error('id-collision', 'IDの衝突があるため公開できません。')];
   }
   if ([...index.documents.values()].some(document => document.trees.some(tree =>
     tree.id !== undefined && !/^[A-Za-z0-9-]+$/.test(tree.id)))) {
-    return { trees: [], diagnostics: [error('invalid-id', 'IDの形式が不正なため公開できません。')] };
+    return [error('invalid-id', 'IDの形式が不正なため公開できません。')];
   }
   if (!validIndex(index)) {
-    return { trees: [], diagnostics: [error('invalid-index', '入力索引の整合性を確認できないため公開できません。')] };
+    return [error('invalid-index', '入力索引の整合性を確認できないため公開できません。')];
   }
+  return [];
+}
+
+/** Pure, fail-closed public projection. String metadata is plain text, not executable Markdown. */
+export function projectPublic(index: HybridIndex): PublicProjection {
+  const preflight = publicIndexDiagnostics(index);
+  if (preflight.length) return { trees: [], diagnostics: preflight };
   const trees: PublicTree[] = [];
   const diagnostics: HybridDiagnostic[] = [];
   for (const document of index.documents.values()) {

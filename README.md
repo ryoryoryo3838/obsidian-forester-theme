@@ -160,7 +160,22 @@ node dist/project-public.mjs \
 
 CLIはソースを書き換えず、hidden directoryとsymlinkを辿りません。出力はvault外のJSONのみ。失敗時はnonzeroで公開を拒否し、以前の成功artifactが残る場合があるため、必ず終了コードを確認します。LF/CRLFは対応し、単独CRは安全側で拒否します。未検証asset・生HTML・公開領域のraw評価等も拒否します。
 
-これは**検査済みJSON抽出まで**で、Forester HTML rendererや既存CIへの接続・deploymentは別工程です。
+既定の出力は互換用の`forester-public-v1`です。Forester向けの構造付き出力は`--format forest`で明示します。
+
+```sh
+node dist/project-public.mjs \
+  --vault /absolute/path/to/private-vault \
+  --format forest \
+  --out /absolute/path/outside-vault/public-forest.json
+```
+
+`forester-public-v2`ではnamed／anonymous subtree、metadata、transclusionのh/t flagsを保持します。非公開ノート内の公開subtreeは、非公開の祖先・兄弟・子・filename fallback・私的な継承metadataを伴わない独立した公開rootです。リンクされているだけでは公開許可を与えません。公開の省略記法は追加せず、`%%p%%`はprivateのままです。
+
+v2のtransclusionは独立した行に置き、h/tは同じ行の直後へ一つだけ付けます。同じ行でembedの前やembedとflagの間にコメントを挟む配置、複数control、未知flagは黙って無視せず拒否します。未対応のinline transclusion・asset・raw／HTML等も安全側で拒否します。
+
+対応する`tree_of_md --public-forest public-forest.json --out-dir trees`へ渡す構造です。旧`tree-md` CLI／`Tree_md`は互換用に維持します。固定Forester `6.0~dev`での実HTML/XML・Chromiumの合成受入と独立レビューの範囲は [ACCEPTANCE-PUBLIC-FOREST.md](ACCEPTANCE-PUBLIC-FOREST.md) を参照してください。正式なstable 6.0への適合保証ではありません。
+
+これは**ローカル公開JSON抽出まで**で、実コンテンツ審査・CIの認証／有効化・Cloudflare deploymentは別工程です。既存のprivate vault backupと公開用の入力repoを分離し、公開用Actionsにはraw vaultを渡しません。
 
 ## 開発・検証
 
@@ -190,4 +205,4 @@ manifest.json, theme.css     任意のForesterテーマ
 scripts/install.sh          既存のテーマ/プラグイン導入helper
 ```
 
-Datalog、全文検索統合、全Forester評価、トランスパイラ適合、本番pipeline移行、完全なmetadata関係モデルは現版の完了範囲に含めません。同じ2.0.0の差替えなので、自動更新が検出されない場合はPre-releaseの3ファイルを再取得してください。
+Datalog、全文検索統合、全Forester評価、全構文のトランスパイラ適合、本番pipeline移行、完全なmetadata関係モデルは現版の完了範囲に含めません。同じ2.0.0の差替えなので、自動更新が検出されない場合はPre-releaseの3ファイルを再取得してください。
