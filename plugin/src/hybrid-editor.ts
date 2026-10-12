@@ -1,7 +1,7 @@
 import { EditorState, Prec, StateEffect, StateField, type Extension, type Range } from '@codemirror/state';
-import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view';
+import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet } from '@codemirror/view';
 import type { HybridDocument, HybridResolution, HybridTree } from './hybrid-types';
-import { planDisplay, rootHeadingAt, foresterTokens, type DisplaySpan, type EmbedFlags } from './hybrid-display';
+import { planDisplay, parseEmbedLine, rootHeadingAt, foresterTokens, type DisplaySpan, type EmbedFlags } from './hybrid-display';
 import { appendTaxon, appendSlug, renderMetadata, renderTreeHeader } from './hybrid-header';
 import type { BackmatterGroups } from './hybrid-backmatter';
 export const hybridRefresh = StateEffect.define<null>();
@@ -115,5 +115,59 @@ export function createHybridEditor(host:HybridEditorHost):Extension {
     return Decoration.set(ranges,true);
   };
   const field=StateField.define<DecorationSet>({create:build,update:(value,tr)=>tr.docChanged||tr.selection||tr.reconfigured||tr.effects.some(e=>e.is(hybridRefresh))?build(tr.state):value,provide:f=>EditorView.decorations.from(f)});
-  return [Prec.highest(field),EditorView.atomicRanges.of(view=>view.state.field(field))];
+  // The active literal must stay editable. Native filename lookup cannot resolve
+  // a tree-only ID, so hide its card, not the source or the native decoration.
+  const editingIdEmbeds=ViewPlugin.define(view=>{
+    const hiddenClass='hybrid-editing-id-embed',owned=new Set<HTMLElement>();
+    const window=view.dom.ownerDocument.defaultView!;
+    let frame:number|null=null,destroyed=false;
+    const clear=()=>{for(const el of owned)el.classList.remove(hiddenClass);owned.clear();};
+    const sync=()=>{
+      frame=null;if(destroyed)return;
+      const wanted=new Set<HTMLElement>(),candidates:Array<{el:HTMLElement;target:string;from:number;to:number}>=[];
+      // Reject off-cursor/native-rendered DOM before asking for a semantic plan.
+      // A native card's ID alone never grants ownership of another occurrence.
+      for(const el of Array.from(view.contentDOM.querySelectorAll<HTMLElement>('.internal-embed[src]'))){
+        const target=el.getAttribute('src')??'';
+        if(!/^[A-Za-z0-9-]+$/.test(target)||el.closest('.cm-content')!==view.contentDOM||el.closest('.hybrid-embed,.hybrid-backmatter-host')||el.parentElement?.closest('.internal-embed,.markdown-preview-view,.markdown-rendered')||el.querySelector('.markdown-preview-view,.markdown-rendered'))continue;
+        // CM can map a descendant of a ranged native widget to its end.
+        let at:number;try{at=view.posAtDOM(el);}catch{continue;}
+        if(!Number.isInteger(at)||at<0||at>view.state.doc.length)continue;
+        const line=view.state.doc.lineAt(at),flags=parseEmbedLine(line.text);
+        if(!flags||flags.error||flags.target!==target)continue;
+        const literal=/!\[\[[^\]\r\n]+\]\]/.exec(line.text);
+        if(!literal)continue;
+        const from=line.from+literal.index,to=from+literal[0].length;
+        if(at<from||at>to||!view.state.selection.ranges.some(r=>r.from<=to&&r.to>=from))continue;
+        candidates.push({el,target,from,to});
+      }
+      const doc=candidates.length?host.document(view.state):null;
+      if(doc?.enabled&&doc.source===view.state.doc.toString()){
+        // Empty selections recover the canonical, protected-range-aware plan;
+        // the normal field intentionally omits this span while it is edited.
+        const plan=planDisplay(doc,[],(target,path)=>host.resolve(target,path??doc.path));
+        for(const {el,target,from,to} of candidates){
+          if(!plan.spans.some(span=>span.kind==='embed'&&!span.error&&span.target===target&&span.from<=from&&span.to>=to)||host.nativeEmbed?.(target,doc.path))continue;
+          const result=host.resolve(target,doc.path);
+          if(result.status==='resolved'&&result.document.enabled&&result.tree.id?.toLowerCase()===target.toLowerCase())wanted.add(el);
+        }
+      }
+      for(const el of owned)if(!wanted.has(el)){el.classList.remove(hiddenClass);owned.delete(el);}
+      for(const el of wanted)if(!owned.has(el)){el.classList.add(hiddenClass);owned.add(el);}
+    };
+    const schedule=()=>{if(!destroyed&&frame===null)frame=window.requestAnimationFrame(sync);};
+    // Native card population may follow CM's update. Observe this view only;
+    // class changes are deliberately excluded to avoid observing our own writes.
+    const observer=new window.MutationObserver(schedule);
+    observer.observe(view.contentDOM,{childList:true,subtree:true});
+    schedule();
+    return{
+      update(update){
+        if(update.docChanged||update.selectionSet||update.transactions.some(tr=>tr.reconfigured||tr.effects.some(e=>e.is(hybridRefresh)))){clear();schedule();}
+        else if(update.viewportChanged)schedule();
+      },
+      destroy(){destroyed=true;observer.disconnect();if(frame!==null)window.cancelAnimationFrame(frame);clear();}
+    };
+  });
+  return [Prec.highest(field),EditorView.atomicRanges.of(view=>view.state.field(field)),editingIdEmbeds];
 }

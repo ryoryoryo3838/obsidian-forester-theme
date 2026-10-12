@@ -53,6 +53,8 @@ body.forester-enabled.theme-dark {
 .hybrid-bibtex { white-space: pre-wrap; font-size: .85rem; }
 .hybrid-embed { border-inline-start: 2px solid var(--background-modifier-border); padding-inline-start: .75em; margin-block: .4em; }
 .hybrid-embed h3 { margin-block: .25em; }
+/* Only the owned native card for a resolved ID being edited; raw source stays visible. */
+.markdown-source-view.mod-cm6 .cm-content .internal-embed.hybrid-editing-id-embed { display: none !important; }
 .hybrid-raw { white-space: pre-wrap; border-radius: var(--radius-s); background: var(--background-secondary); padding: .15em .3em; }
 .hybrid-raw-label { color: var(--text-muted); font-size: .7em; margin-inline-end: .6em; }
 .hybrid-token-command { color: var(--code-function); }

@@ -1,6 +1,6 @@
 import { Component, editorInfoField, editorLivePreviewField, MarkdownRenderChild, MarkdownRenderer, MarkdownView, Modal, Notice, Plugin, TFile, type Editor, type MarkdownPostProcessorContext } from 'obsidian';
 import { ViewPlugin, type EditorView } from '@codemirror/view';
-import type { EditorState } from '@codemirror/state';
+import { ChangeSet, type EditorState } from '@codemirror/state';
 import { drawHybridId, hybridModeEnabled, indexHybrid, parseHybrid, planHybridSave, resolveHybrid } from './hybrid-core';
 import { createHybridEditor, hybridRefresh, type EditorBackmatter } from './hybrid-editor';
 import { renderBackmatter } from './hybrid-backmatter';
@@ -60,6 +60,10 @@ function textPatches(before: string, after: string): TextPatch[] {
 export class HybridController {
   private sources = new Map<string, string>();
   private sourceVersions = new Map<string, number>();
+  private pendingSourceReads = new Set<Promise<void>>();
+  private ownWrite?: { file: TFile; path: string; source: string };
+  private sourceWrite?: { path: string; source: string };
+  private sourceConflictGeneration = 0;
   private sourceGeneration = 0;
   private index: HybridIndex = indexHybrid([]);
   private fieldIndex: HybridIndex = this.index;
@@ -130,8 +134,15 @@ export class HybridController {
     return text !== undefined && hybridModeEnabled(path, text, this.options());
   }
 
-  private recordSource(path: string, source?: string): boolean {
+  private recordSource(path: string, source?: string, ownPublication = false): boolean {
+    const owned = source !== undefined && (ownPublication ||
+      this.ownWrite?.path === path && this.ownWrite.source === source ||
+      this.sourceWrite?.path === path && this.sourceWrite.source === source);
+    if (this.ownWrite?.path === path && this.ownWrite.source !== source) this.ownWrite = undefined;
     if (source !== undefined && this.sources.get(path) === source) return false;
+    // An unknown event/read failure is a conflict even on the current CAS path.
+    // Publishing our exact write may advance versions, but cannot erase this epoch.
+    if (!owned) this.sourceConflictGeneration++;
     if (source === undefined) this.sources.delete(path); else this.sources.set(path, source);
     this.sourceVersions.set(path, ++this.sourceGeneration);
     return true;
@@ -154,14 +165,40 @@ export class HybridController {
       for (const child of [...this.readingChildren]) child.unload();
       this.viewCleanups.clear(); this.settled.clear(); this.observedEditors.clear(); this.nativeViews.clear();
       this.sources.clear(); this.sourceVersions.clear(); this.parsed.clear(); this.overlays.clear(); this.overlayDocuments.clear();
+      this.pendingSourceReads.clear();
+      this.ownWrite = undefined;
+      this.sourceWrite = undefined;
       this.index = { documents: new Map(), ids: new Map(), diagnostics: [] }; this.fieldIndex = this.index;
     });
-    const changed = (file: TFile, source?: string): Promise<void> => {
+    const changed = (file: TFile, source?: string, modify = false): Promise<void> => {
       if (this.stopped) return Promise.resolve();
+      // Only one modify for an actual controller-owned write may be validated
+      // by bytes. All other unknown events invalidate synchronously (including ABA).
+      const receipt = this.ownWrite;
+      if (modify && source === undefined && this.inFlight && receipt?.file === file && receipt.path === file.path) {
+        this.ownWrite = undefined; // Single use, even while this read is pending.
+        const path = file.path, conflictGeneration = this.sourceConflictGeneration;
+        const pending = Promise.resolve().then(async () => {
+          const current = await vault.read(file);
+          if (this.stopped) return;
+          // Native reload can publish our exact bytes while this read is pending.
+          // Only an independent conflict, not that owned publication, retires it.
+          if (file.path !== path || vault.getAbstractFileByPath(path) !== file || current !== receipt.source || this.sourceConflictGeneration !== conflictGeneration) this.recordSource(path);
+          else this.recordSource(path, current, true);
+        }).catch(error => {
+          if (this.stopped) return;
+          // Native event dispatch does not await returned promises. Fail closed
+          // before releasing the barrier, and consume the rejection here.
+          this.recordSource(path);
+          new Notice(`Hybrid I/O ${path}: ${String(error)}`, 10000);
+        }).finally(() => { this.pendingSourceReads.delete(pending); });
+        this.pendingSourceReads.add(pending);
+        return pending;
+      }
       if (!this.recordSource(file.path, source)) return this.inFlight ? Promise.resolve() : this.refreshTask ?? Promise.resolve();
       return this.inFlight ? Promise.resolve() : this.refresh();
     };
-    this.plugin.registerEvent(vault.on('modify', file => file instanceof TFile ? changed(file) : this.refresh()));
+    this.plugin.registerEvent(vault.on('modify', file => file instanceof TFile ? changed(file, undefined, true) : this.refresh()));
     this.plugin.registerEvent(vault.on('create', file => file instanceof TFile ? changed(file) : this.refresh()));
     this.plugin.registerEvent(vault.on('rename', (file, oldPath) => {
       if (this.stopped) return Promise.resolve();
@@ -439,21 +476,26 @@ export class HybridController {
         if (!plan.edits.length || plan.diagnostics.some(d => d.severity === 'error')) return;
         await this.commitPlan(plan, path, editor);
       } catch (error) { new Notice(`Hybrid I/O: ${String(error)}`, 10000); }
-      finally { this.inFlight = false; await this.refresh(); }
+      finally { this.ownWrite = undefined; this.inFlight = false; await this.refresh(); }
     };
     this.saveTail = this.saveTail.then(run, run).catch(error => { new Notice(`Hybrid: ${String(error)}`, 10000); console.error('Hybrid settled save', error); });
   }
 
-  private async commitPlan(plan: HybridSavePlan, path: string, editor: Editor, guard = () => this.active(path, editor), dependencies: HybridDocument[] = []): Promise<boolean> {
+  private async commitPlan(plan: HybridSavePlan, path: string, editor: Editor, guard: (sourceWritten?: boolean) => boolean = () => this.active(path, editor), dependencies: HybridDocument[] = []): Promise<boolean> {
     const key = this.configuration().key, versions = new Map(this.sourceVersions);
+    // Capture at commit entry (after insertion flush/refresh), before any CAS awaits.
+    const conflictGeneration = this.sourceConflictGeneration;
     const files = new Map(this.plugin.app.vault.getMarkdownFiles().map(file => [file.path, file]));
     let writingPath: string | undefined;
+    let sourceWritten = false;
     const namespaceCurrent = (): boolean => {
       const now = this.plugin.app.vault.getMarkdownFiles();
       return now.length === files.size && now.every(file => files.get(file.path) === file) &&
         [...versions].every(([target, version]) => target === writingPath || this.sourceVersions.get(target) === version);
     };
-    const allowed = (): boolean => guard() && this.configuration().key === key && namespaceCurrent() &&
+    const allowed = (): boolean => guard(sourceWritten) && this.configuration().key === key && namespaceCurrent() &&
+      this.sourceConflictGeneration === conflictGeneration &&
+      this.pendingSourceReads.size === 0 &&
       [...dependencySources].every(([target, source]) => openEditors(target).every(e => e.getValue() === source));
     // Unload unregisters native views, but an in-flight rollback still needs their snapshot guards.
     const retained = new Map([...plan.edits, ...dependencies].map(edit => [edit.path, this.editors(edit.path)]));
@@ -463,11 +505,13 @@ export class HybridController {
       return !info?.file || info.file.path === target; // Do not patch an editor reused for another file.
     })])];
     const readDependencies = async (): Promise<boolean> => {
+      while (this.pendingSourceReads.size) await Promise.all([...this.pendingSourceReads]);
       for (const [target, source] of dependencySources) {
         const file = this.plugin.app.vault.getAbstractFileByPath(target);
         if (!(file instanceof TFile) || !this.isEnabled(target, source)) return false;
         if (await this.io(target, () => this.plugin.app.vault.read(file)) !== source || openEditors(target).some(e => e.getValue() !== source)) return false;
       }
+      while (this.pendingSourceReads.size) await Promise.all([...this.pendingSourceReads]);
       return allowed();
     };
     if (!await readDependencies()) { new Notice('Hybrid: selected tree snapshot changed; insertion cancelled'); return false; }
@@ -476,6 +520,7 @@ export class HybridController {
         const file = this.plugin.app.vault.getAbstractFileByPath(target);
         if (!(file instanceof TFile)) throw new Error(`Missing file: ${target}`);
         const disk = await this.io(target, () => this.plugin.app.vault.read(file));
+        while (this.pendingSourceReads.size) await Promise.all([...this.pendingSourceReads]);
         if (!allowed() || openEditors(target).some(e => e.getValue() !== disk)) throw new Error(`Unsettled editor: ${target}`);
         return disk;
       },
@@ -491,9 +536,14 @@ export class HybridController {
         const written = await this.io(target, () => this.plugin.app.vault.process(file, current => {
           // Cleanup is still CAS-protected, but must not depend on the author staying in this view.
           if ((!rollback && !allowed()) || current !== before || openEditors(target).some(e => e.getValue() !== before && (!rollback || e.getValue() !== after))) return current;
-          accepted = true; return after;
+          accepted = true;
+          if (!rollback && target === path) sourceWritten = true;
+          this.sourceWrite = { path: target, source: after };
+          if (current !== after) this.ownWrite = { file, path: target, source: after };
+          return after;
         }));
         if (!accepted || written !== after) return false;
+        while (this.pendingSourceReads.size) await Promise.all([...this.pendingSourceReads]);
         if (await this.io(target, () => this.plugin.app.vault.read(file)) !== after) throw new Error(`Post-write disk changed: ${target}`);
         if (!rollback && !allowed()) throw new Error(`Save interrupted: ${target}`);
         const open = openEditors(target);
@@ -508,7 +558,7 @@ export class HybridController {
         if (dependencySources.has(target)) dependencySources.set(target, after);
         versions.set(target, this.sourceVersions.get(target)!);
         return true;
-        } finally { writingPath = undefined; }
+        } finally { writingPath = undefined; this.sourceWrite = undefined; }
       },
     }, path);
     if (!result.committed) new Notice(`Hybrid: 保存を中止 [${result.conflicts.join(', ')}]${result.partial.length ? ` / partial rollback: ${result.partial.join(', ')}` : ''}`, 10000);
@@ -586,7 +636,7 @@ export class HybridController {
       if (this.stopped) return;
       this.inFlight = true;
       try { await action(); }
-      finally { this.inFlight = false; await this.refresh(); }
+      finally { this.ownWrite = undefined; this.inFlight = false; await this.refresh(); }
     };
     const result = this.saveTail.then(run, run);
     this.saveTail = result.catch(error => { console.error('Hybrid command', error); new Notice(`Hybrid: ${String(error)}`, 10000); });
@@ -601,10 +651,16 @@ export class HybridController {
     // Keep the picker capture live through queued work and every forward CAS await.
     // The source edit is committed last, so controller-owned source patches occur
     // only after the final guard; rollback intentionally does not use this guard.
-    const selection = (): string => JSON.stringify(editor.listSelections().map(s => [s.anchor.line, s.anchor.ch, s.head.line, s.head.ch]));
-    const capturedSelection = selection();
-    const guard = (): boolean => {
-      try { return this.active(path, editor) && file.path === path && this.plugin.app.vault.getAbstractFileByPath(path) === file && this.configuration().key === config.key && selection() === capturedSelection; }
+    const offsets = () => editor.listSelections().map(s => [editor.posToOffset(s.anchor), editor.posToOffset(s.head)]);
+    const capturedOffsets = offsets(), capturedSelection = JSON.stringify(capturedOffsets);
+    let sourceAfter: string | undefined;
+    let mappedSelections: string[] = [];
+    const guard = (sourceWritten = false): boolean => {
+      try {
+        if (!this.active(path, editor) || file.path !== path || this.plugin.app.vault.getAbstractFileByPath(path) !== file || this.configuration().key !== config.key) return false;
+        const selection = JSON.stringify(offsets());
+        return selection === capturedSelection || sourceWritten && editor.getValue() === sourceAfter && mappedSelections.includes(selection);
+      }
       catch { return false; }
     };
     if (!guard() || editor.getValue() !== before || from < 0 || to < from || to > before.length) return;
@@ -651,6 +707,22 @@ export class HybridController {
       for (const edit of plan.edits) edits.set(edit.path, { path: edit.path, before: index.documents.get(edit.path)!.source, after: edit.after });
       const sourceEdit = plan.edits.find(edit => edit.path === path);
       edits.set(path, { path, before, after: sourceEdit?.after ?? prospective });
+      sourceAfter = edits.get(path)!.after;
+      // Native TextFileView can apply our disk write to the clean editor before
+      // vault.process resolves. Accept only the exact planned bytes and either
+      // native CM mapping or our own bounded mapping, and only after source CAS.
+      const patches = textPatches(before, sourceAfter);
+      const nativeMap = ChangeSet.of(patches.map(p => ({ from: p.from, to: p.to, insert: p.text })), before.length);
+      const boundedMap = (at: number): number => {
+        let shift = 0;
+        for (const patch of patches) {
+          if (at < patch.from) break;
+          if (at <= patch.to) return patch.from + shift + Math.min(at - patch.from, patch.text.length);
+          shift += patch.text.length - (patch.to - patch.from);
+        }
+        return at + shift;
+      };
+      mappedSelections = [nativeMap.mapPos.bind(nativeMap), boundedMap].map(map => JSON.stringify(capturedOffsets.map(range => range.map(at => map(at)))));
       await this.commitPlan({ edits: [...edits.values()], diagnostics: plan.diagnostics }, path, editor, guard, [target]);
     });
   }
@@ -660,6 +732,10 @@ export class HybridController {
     for (const leaf of this.plugin.app.workspace.getLeavesOfType('markdown')) {
       const view = leaf.view;
       if (view instanceof MarkdownView && view.file?.path === path && view.editor === editor && typeof view.save === 'function') {
+        const file = view.file, source = editor.getValue();
+        const disk = await this.io(path, () => this.plugin.app.vault.read(file));
+        if (this.stopped || view.file !== file || view.editor !== editor || file.path !== path || this.plugin.app.vault.getAbstractFileByPath(path) !== file || !this.active(path, editor) || editor.getValue() !== source) return;
+        if (disk !== source) this.ownWrite = { file, path, source };
         await this.io(path, () => view.save());
         return;
       }
