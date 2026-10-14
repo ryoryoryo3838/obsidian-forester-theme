@@ -132,7 +132,7 @@ subtreeを非公開にする省略形は **`%%p%%`（private）**。見出し直
 公開しない本文。
 ```
 
-子subtreeも非公開を継承しますが、子に`publish: true`を明示すれば例外公開です。Obsidian内では通常どおり読めます。埋め込み表示用の`h`/`t`とは別の指定なので、`%%htp%%`や埋め込み末尾には書きません。
+子subtreeも非公開を継承しますが、子に`publish: true`を明示すれば例外公開です。Obsidian内では通常どおり読めます。treeの埋め込み表示用の`h`/`t`とは別なので、tree embedへ`%%p%%`や`%%htp%%`を付けません。画像だけは下記の配置単位の指定を使えます。
 
 **この省略形には対応ビルドのplugin／公開CLIが必要です。古い配布版は`%%p%%`を無視するため、更新するまでは長い`%% publish: false %%`を使用してください。**
 
@@ -173,6 +173,10 @@ node dist/project-public.mjs \
 
 v2のtransclusionは独立した行に置き、h/tは同じ行の直後へ一つだけ付けます。同じ行でembedの前やembedとflagの間にコメントを挟む配置、複数control、未知flagは黙って無視せず拒否します。未対応のinline transclusion・asset・raw／HTML等も安全側で拒否します。
 
+正本の`![[非公開tree]]`とObsidian内の埋め込みは保持します。**v2の公開出力だけ**で、既知の非公開treeは`{"kind":"unavailable"}`へ置換します。対応consumerは固定の`/_unavailable/`への通常リンク（既定ラベル`[非公開]`）として描画し、非公開ID・path・alias・bodyを受け取りません。`public-title: true`で別途認めたsemantic titleだけ任意の`label`へ入ります。filename fallbackは不可。未知／曖昧な参照は従来どおりエラーです。単独の参照paragraphも同じkindを使い、文中／soft-line-breakの参照はparagraphを壊さない非リンクの伏字／承認タイトルを維持します。v1の非公開tree embed拒否は変更しません。
+
+独立行の画像には`![[photo.jpg|600x400]] %%p%%`または`![alt](photo.jpg) %%p%%`を使えます。v1/v2とも**その配置だけ**を公開本文から省き、正本・local/native画像・寸法・tree IDを変更しません。`p`混在／未知／不完全control・inline／list／quote配置は公開拒否です。code/math/raw等の保護領域内では画像controlとして解釈しません（既存のraw公開拒否は維持）。無指定画像には別途vetted-asset審査が必要で、この変更は公開画像pipelineやfile copyの許可を追加しません。詳しいwire・互換変更・検証は [PUBLIC-CONTROLS.md](PUBLIC-CONTROLS.md)。
+
 対応する`tree_of_md --public-forest public-forest.json --out-dir trees`へ渡す構造です。旧`tree-md` CLI／`Tree_md`は互換用に維持します。固定Forester `6.0~dev`での実HTML/XML・Chromiumの合成受入と独立レビューの範囲は [ACCEPTANCE-PUBLIC-FOREST.md](ACCEPTANCE-PUBLIC-FOREST.md) を参照してください。正式なstable 6.0への適合保証ではありません。
 
 これは**ローカル公開JSON抽出まで**で、実コンテンツ審査・CIの認証／有効化・Cloudflare deploymentは別工程です。既存のprivate vault backupと公開用の入力repoを分離し、公開用Actionsにはraw vaultを渡しません。
@@ -182,6 +186,7 @@ v2のtransclusionは独立した行に置き、h/tは同じ行の直後へ一つ
 ```sh
 cd plugin
 npm test              # parser/public/controller/input/sidebar/CSSの回帰
+npm run test:public-controls # unavailable wire・画像p・CLI/source hashのfocused回帰
 npm run build         # TypeScript + production bundle
 npm run test:browser  # 実Chromium + CodeMirror
 npm audit --omit=dev

@@ -102,7 +102,9 @@ for (const body of ['`Heading`\n=======\n', 'Heading `code`\n=======\n', '`Headi
 }));
 
 for(const [name,body] of [
-  ['private embed','![[PRIVATE]]\n'],['raw','\\{ \\import{CANARY} }'],['asset','![[CANARY.png]]'],['inline','Inline ![[PUBLICA]].'],['cycle','![[PUBLICA]]\n'],['dangling','[[CANARY-MISSING]]'],
+  // Known-private block embeds now succeed only as closed unavailable nodes;
+  // keep refusal coverage for p on a tree (p is image-occurrence control only).
+  ['private tree with image control','![[PRIVATE]] %%p%%\n'],['raw','\\{ \\import{CANARY} }'],['asset','![[CANARY.png]]'],['inline','Inline ![[PUBLICA]].'],['cycle','![[PUBLICA]]\n'],['dangling','[[CANARY-MISSING]]'],
 ]) test(`actual forest CLI privacy refusal leaves no artifact: ${name}`,async()=>fixture(async(base,vault)=>{
   await writeFile(join(vault,'Public.md'),source.split('Intro.')[0]+body);
   await writeFile(join(vault,'CANARY-PRIVATE.md'),'---\nforester-id: PRIVATE\ntitle: CANARY-TITLE\n---\nCANARY-BODY');

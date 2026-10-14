@@ -210,7 +210,7 @@ for (const [name, body, code] of [
   ['quote embed','> ![[PUBLICA]]\n','unsupported-transclusion-placement'],
   ['unknown flag','![[PUBLICA]] %%x%%\n','unsupported-transclusion-flags'],
   ['dangling link','[[missing|CANARY]]','unresolved-reference'],
-  ['asset','![[CANARY.png]]','unresolved-reference'],
+  ['asset','![[CANARY.png]]','unvetted-asset'],
   ['raw Forester','\\{ \\import{CANARY} }','unsupported-raw'],
   ['raw HTML','<script>CANARY</script>','unsafe-html'],
   ['unsafe URL','[CANARY](javascript:alert)','unsafe-url'],

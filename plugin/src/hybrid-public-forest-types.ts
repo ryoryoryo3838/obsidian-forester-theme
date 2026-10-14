@@ -15,6 +15,9 @@ export interface PublicForestTree {
 }
 export type PublicForestNode = { kind: 'markdown'; text: string }
   | { kind: 'subtree'; tree: PublicForestTree }
-  | { kind: 'transclude'; id: string; header: boolean; toc: boolean };
+  | { kind: 'transclude'; id: string; header: boolean; toc: boolean }
+  // Closed, source-free link: /_unavailable/, default literal label [非公開].
+  // Optional label requires independent semantic public-title authorization.
+  | { kind: 'unavailable'; label?: string };
 export interface PublicForest { schema: 'forester-public-v2'; trees: PublicForestTree[]; assets: []; }
 export interface PublicForestProjection { forest: PublicForest; diagnostics: HybridDiagnostic[]; }

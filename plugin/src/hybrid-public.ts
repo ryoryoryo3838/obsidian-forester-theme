@@ -6,10 +6,32 @@ export function error(code: string, message: string): HybridDiagnostic {
   return { code, message, path: '', severity: 'error' };
 }
 
+/** Negative occurrence permission only; never read, resolve or authorize an asset. */
+export function privateImageRanges(document: HybridDocument, from: number, to: number): SourceRange[] {
+  const ranges: SourceRange[] = [];
+  const images = /^ {0,3}(?:!\[\[([^\]\r\n]+)\]\]|!\[(?:\\[^\r\n]|[^\]\\\r\n])*\]\([ \t]*(?:<[^>\r\n]*>|[^)\s]*)(?:[ \t]+(?:"[^"\r\n]*"|'[^'\r\n]*'))?[ \t]*\))[ \t]+%%p%%[ \t]*(?:\r?\n|(?![\s\S]))/gm;
+  let match: RegExpExecArray | null;
+  const source = document.source.slice(from, to);
+  while ((match = images.exec(source))) {
+    const start = from + match.index;
+    if (start > 0 && document.source[start - 1] !== '\n') continue;
+    // Never remove only the start of a protected span: that can reactivate its
+    // comment/code/math/raw payload. Only this image's exact p comment is owned.
+    const end = start + match[0].length;
+    const control = start + match[0].lastIndexOf('%%p%%');
+    if (document.protectedRanges.some(range => range.from < end && range.to > start &&
+        !(range.from === control && range.to === control + '%%p%%'.length))) continue;
+    if (match[1] !== undefined && !/\.(?:avif|bmp|gif|ico|jpe?g|png|svg|tiff?|webp)(?:#.*)?$/i.test(match[1].split('|')[0])) continue;
+    ranges.push({ from: start, to: start + match[0].length });
+  }
+  return ranges;
+}
+
 function visibleBody(document: HybridDocument, tree: HybridTree): string {
   const omissions: SourceRange[] = document.trees
     .filter(child => child !== tree && !child.meta.publish && child.from >= tree.contentFrom && child.to <= tree.to)
-    .map(child => ({ from: child.from, to: child.to }));
+    .map(child => ({ from: child.from, to: child.to }))
+    .concat(privateImageRanges(document, tree.contentFrom, tree.to));
   for (const node of document.trees) {
     for (const range of node.metadataRanges) {
       if (range.from >= tree.contentFrom && range.to <= tree.to) omissions.push(range);

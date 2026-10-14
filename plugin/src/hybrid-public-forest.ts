@@ -1,7 +1,7 @@
 import type { HybridDiagnostic, HybridDocument, HybridIndex, HybridTree, SourceRange } from './hybrid-types';
-import type { PublicAttribution, PublicForestProjection, PublicForestTree } from './hybrid-public-forest-types';
+import type { PublicAttribution, PublicForestNode, PublicForestProjection, PublicForestTree } from './hybrid-public-forest-types';
 import { resolveHybrid } from './hybrid-core';
-import { error, LINKS, markdown, publicBibliography, publicIndexDiagnostics, referenceText, safeExternalUrl, safeLive } from './hybrid-public';
+import { error, LINKS, markdown, privateImageRanges, publicBibliography, publicIndexDiagnostics, referenceText, safeExternalUrl, safeLive } from './hybrid-public';
 
 function chunk(document: HybridDocument, tree: HybridTree, index: HybridIndex, diagnostics: HybridDiagnostic[], source: string): PublicForestTree['content'] {
   const content: PublicForestTree['content'] = [];
@@ -61,6 +61,32 @@ function chunk(document: HybridDocument, tree: HybridTree, index: HybridIndex, d
       diagnostics.push(error('unsupported-transclusion-placement', 'この埋め込み位置は公開未対応です。'));
       return content;
     }
+    const destination = placement[3].split('|')[0];
+    const resolved = resolveHybrid(index, destination, document.path);
+    if (resolved.status === 'resolved' && (!resolved.document.enabled || !resolved.tree.meta.publish) &&
+        !(/\.[A-Za-z0-9]+(?:#.*)?$/.test(destination) && !/\.md(?:#.*)?$/i.test(destination))) {
+      // An unavailable placement must also validate the original physical line:
+      // unclosed comments vanish from callbacks; noncanonical controls are masked.
+      const newline = source.indexOf('\n', placements.lastIndex);
+      const end = newline < 0 ? source.length : newline;
+      const suffix = source.slice(placements.lastIndex, end).split('');
+      for (const range of comments) {
+        if (range.from < placements.lastIndex || range.from >= end) continue;
+        if (source.startsWith('%%', range.from)) {
+          const words = source.slice(range.from + 2, range.to - 2).trim().split(/[ \t]+/);
+          if (words.length === 1 || words[0].length === 1 || /^[htp]+$/i.test(words[0]) ||
+              /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(words.join(' '))) {
+            diagnostics.push(error('unsupported-transclusion-flags', '未対応の埋め込みフラグです。'));
+            return content;
+          }
+        }
+        for (let i = range.from; i < Math.min(end, range.to); i++) suffix[i - placements.lastIndex] = ' ';
+      }
+      if (!/^[ \t]*(?:%%[ht]+%%)?[ \t]*\r?$/.test(suffix.join(''))) {
+        diagnostics.push(error('unsupported-transclusion-flags', '未対応の埋め込みフラグです。'));
+        return content;
+      }
+    }
   }
   const visible = (text: string, from: number, start: number, end: number) => {
     let value = '', cursor = start;
@@ -110,9 +136,16 @@ function chunk(document: HybridDocument, tree: HybridTree, index: HybridIndex, d
         }
         const letters = flags[1] ?? '';
         if (/[^ht]/.test(letters)) diagnostics.push(error('unsupported-transclusion-flags', '未対応の埋め込みフラグです。'));
-        const resolved = resolveHybrid(index, target.split('|')[0], document.path);
-        if (resolved.status !== 'resolved' || !resolved.tree.id) diagnostics.push(error('unresolved-reference', '公開参照先を一意に確認できません。'));
-        else if (!resolved.document.enabled || !resolved.tree.meta.publish) diagnostics.push(error('private-embed', '非公開ツリーは埋め込めません。'));
+        const destination = target.split('|')[0];
+        const resolved = resolveHybrid(index, destination, document.path);
+        if (/\.[A-Za-z0-9]+(?:#.*)?$/.test(destination) && !/\.md(?:#.*)?$/i.test(destination))
+          diagnostics.push(error('unvetted-asset', '検証済み公開マニフェストのないアセットは公開できません。'));
+        else if (resolved.status !== 'resolved') diagnostics.push(error('unresolved-reference', '公開参照先を一意に確認できません。'));
+        else if (!resolved.document.enabled || !resolved.tree.meta.publish) {
+          flush();
+          content.push(unavailable(resolved.document, resolved.tree, diagnostics));
+        }
+        else if (!resolved.tree.id) diagnostics.push(error('unresolved-reference', '公開参照先を一意に確認できません。'));
         else {
           flush();
           content.push({ kind: 'transclude', id: resolved.tree.id, header: !letters.includes('h'), toc: !letters.includes('t') });
@@ -120,6 +153,26 @@ function chunk(document: HybridDocument, tree: HybridTree, index: HybridIndex, d
         cursor = endOfLine < 0 ? end : end + 1;
         tokens.lastIndex = cursor;
         continue;
+      }
+      const ordinaryTarget = target?.split('|')[0] ?? destination?.replace(/^<|>$/g, '');
+      if (ordinaryTarget !== undefined && citation === undefined && !safeExternalUrl(ordinaryTarget) &&
+          !(/\.[A-Za-z0-9]+(?:#.*)?$/.test(ordinaryTarget) && !/\.md(?:#.*)?$/i.test(ordinaryTarget))) {
+        const resolved = resolveHybrid(index, ordinaryTarget, document.path);
+        const start = source.lastIndexOf('\n', from + match.index - 1) + 1;
+        const newline = source.indexOf('\n', from + cursor);
+        const end = newline < 0 ? source.length : newline;
+        const previous = source.slice(source.lastIndexOf('\n', start - 2) + 1, start);
+        const nextEnd = newline < 0 ? -1 : source.indexOf('\n', newline + 1);
+        const next = newline < 0 ? '' : source.slice(newline + 1, nextEnd < 0 ? source.length : nextEnd);
+        // A whole reference paragraph can use the block wire kind. Never split
+        // soft-line-break paragraphs or manufacture trusted relative Markdown.
+        if (resolved.status === 'resolved' && (!resolved.document.enabled || !resolved.tree.meta.publish) &&
+            source.slice(start, from + match.index) === '' &&
+            /^[ \t]*\r?$/.test(source.slice(from + cursor, end)) && !previous.trim() && !next.trim()) {
+          flush();
+          content.push(unavailable(resolved.document, resolved.tree, diagnostics));
+          continue;
+        }
       }
       if (destination !== undefined) {
         const value = destination.replace(/^<|>$/g, '');
@@ -132,6 +185,65 @@ function chunk(document: HybridDocument, tree: HybridTree, index: HybridIndex, d
   }
   flush();
   return content;
+}
+
+// Character classes match the previous /iu scheme tokens, but word boundaries
+// stay case-sensitive ASCII. Consume each maximal scheme run only once.
+function unavailableUri(label: string): boolean {
+  const letter = /[A-Za-z\u0130\u0131\u017f\u212a]/u;
+  const part = /[A-Za-z0-9+.\-\u0130\u0131\u017f\u212a]/u;
+  const word = /[A-Za-z0-9_]/;
+  const whitespace = /\p{White_Space}/u;
+  let cursor = 0;
+  while (cursor < label.length) {
+    if (!part.test(label[cursor])) { cursor++; continue; }
+    const from = cursor;
+    let eligible = false;
+    do {
+      if (letter.test(label[cursor]) && !word.test(label[cursor - 1] ?? '')) eligible = true;
+      cursor++;
+    } while (cursor < label.length && part.test(label[cursor]));
+    if (eligible && label[cursor] === ':' && cursor + 1 < label.length && !whitespace.test(label[cursor + 1])) return true;
+    // A known protocol may be a suffix whose predecessor is non-ASCII even
+    // inside this run. Its longest spelling is 10 code units; never rescan the
+    // whole run or an overlapping suffix. Only known protocols allow spaces
+    // before the colon and do not require a following payload.
+    const known = /(?:https?|ma[i\u0130\u0131]lto|javascr[i\u0130\u0131]pt|data|f[i\u0130\u0131]le|vbscr[i\u0130\u0131]pt)$/iu.exec(label.slice(Math.max(from, cursor - 10), cursor));
+    if (known && !word.test(label[cursor - known[0].length - 1] ?? '')) {
+      while (cursor < label.length && whitespace.test(label[cursor])) cursor++;
+      if (label[cursor] === ':') return true;
+    }
+  }
+  // Cursor never retreats: run/whitespace traversal visits each code unit once,
+  // with bounded character predicates and at most a 10-unit check per run.
+  return false;
+}
+
+function unavailable(document: HybridDocument, tree: HybridTree, diagnostics: HybridDiagnostic[]): PublicForestNode {
+  const label = document.enabled && tree.meta.publicTitle ? tree.meta.title : undefined;
+  if (label !== undefined) {
+    if (tree.meta.titleSource === 'filename') diagnostics.push(error('implicit-public-title', '公開タイトルには明示的なタイトルまたは見出しが必要です。'));
+    literalMetadata(label, diagnostics);
+    // Closed producer-output subset of site literal()/unavailable_label(). Keep
+    // the original label bytes; validation never repairs a title or grants it.
+    // Python's Unicode case-insensitive ASCII ranges also include dotted/dotless
+    // I (JS /iu already handles long s and Kelvin sign). Boundary predicates use
+    // ASCII words without /i: a stable subset of Python words, never host L/N.
+    const hasMatch = (pattern: RegExp, boundary: (match: RegExpExecArray) => boolean): boolean => {
+      let match: RegExpExecArray | null;
+      while ((match = pattern.exec(label))) if (boundary(match)) return true;
+      return false;
+    };
+    // Cheap linear literal gates precede any lexical matching. Reject without
+    // normalizing or changing the encoded-byte cap or the original label.
+    if (!label.trim() || /[\ud800-\udfff]/u.test(label) || new TextEncoder().encode(label).length > 1024 * 1024 ||
+        /[\u0000-\u001f\u007f-\u009f\u2028-\u202e\u2066-\u2069<>\[\]{}\\/|`]/u.test(label) ||
+        unavailableUri(label) || /^[^\p{White_Space}]+\.[A-Za-z0-9]{1,16}$/u.test(label) ||
+        hasMatch(/\.(?:md|markdown|tree|txt|json|ya?ml|html?|xml|png|jpe?g|g[i\u0130\u0131]f|svg|webp|pdf)/giu,
+          match => !/[A-Za-z0-9_]/.test(label[match.index + match[0].length] ?? '')))
+      diagnostics.push(error('unsafe-unavailable-label', '非公開参照の公開タイトルを安全に確認できません。'));
+  }
+  return { kind: 'unavailable', ...(label !== undefined ? { label } : {}) };
 }
 
 const propertyKeys = ['position', 'institution', 'venue', 'source', 'doi', 'orcid', 'external', 'slides', 'video', 'bibtex', 'author'];
@@ -259,6 +371,7 @@ export function projectPublicForest(index: HybridIndex): PublicForestProjection 
           let cursor = from;
           let source = '';
           const ranges = document.trees.reduce((all, t) => all.concat(t.metadataRanges), [] as SourceRange[])
+            .concat(privateImageRanges(document, from, to))
             .filter(r => r.from < to && r.to > from).sort((a, b) => a.from - b.from);
           for (const range of ranges) {
             source += document.source.slice(cursor, Math.max(cursor, range.from));
