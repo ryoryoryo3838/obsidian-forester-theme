@@ -1,10 +1,29 @@
 import {readdir,readFile,mkdir,writeFile,rename,rm,lstat,realpath,readlink} from 'node:fs/promises';
 import {resolve,join,relative,dirname,basename,isAbsolute,sep} from 'node:path';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,createHash} from 'node:crypto';
 import {parseHybrid,indexHybrid} from '../src/hybrid-core';
 import {projectPublic} from '../src/hybrid-public';
 import {projectPublicForest} from '../src/hybrid-public-forest';
 import {hybridOptions} from '../src/hybrid-config';
+import {sanitizeJpeg} from '../src/hybrid-public-jpeg';
+import type {HybridDocument} from '../src/hybrid-types';
+import type {PublicJpeg} from '../src/hybrid-public-forest-types';
+
+/** Vault-relative folder prefix test; a scope names a folder, never a glob. */
+const within=(path:string,folders:string[]):boolean=>folders.some(folder=>path.startsWith(folder+'/'));
+
+/**
+ * Out-of-scope notes stay resolvable so a reference to them is classified as
+ * private rather than unknown, but they can never publish or disclose a title,
+ * and their own diagnostics cannot block (or leak into) the public projection.
+ */
+function confine(document:HybridDocument):void{
+ document.diagnostics=[];
+ for(const tree of document.trees){
+  tree.meta.publish=false;tree.meta.publicTitle=false;
+  if(tree.id!==undefined&&!/^[A-Za-z0-9-]+$/.test(tree.id))tree.id=undefined;
+ }
+}
 
 function inside(root:string,path:string):boolean{
  const rel=relative(root,path);
@@ -58,9 +77,15 @@ async function canonicalOutput(out:string,vault:string):Promise<string>{
 
 /** Read-only vault traversal, no symlink following, no build/eval/network side effects. */
 async function main():Promise<void>{
- const args=process.argv.slice(2),allowed=new Set(['--vault','--out','--config','--format']);
- const values=new Map<string,string>();
- for(let i=0;i<args.length;i+=2){if(!allowed.has(args[i])||!args[i+1]||values.has(args[i]))throw new Error('Usage: project-public --vault PATH --out OUTPUT.json [--config CONFIG.json]');values.set(args[i],args[i+1]);}
+ const args=process.argv.slice(2),allowed=new Set(['--vault','--out','--config','--format','--media-dir']),repeated=new Set(['--scope','--exclude']);
+ const values=new Map<string,string>(),lists=new Map<string,string[]>([['--scope',[]],['--exclude',[]]]);
+ for(let i=0;i<args.length;i+=2){
+  if(!args[i+1]||(!allowed.has(args[i])&&!repeated.has(args[i]))||values.has(args[i]))throw new Error('Usage: project-public --vault PATH --out OUTPUT.json [--config CONFIG.json] [--format forest [--scope FOLDER]... [--exclude PATH]... [--media-dir DIR]]');
+  if(repeated.has(args[i]))lists.get(args[i])!.push(args[i+1]);else values.set(args[i],args[i+1]);
+ }
+ const scope=lists.get('--scope')!,excluded=new Set(lists.get('--exclude')!);
+ if([...scope,...excluded].some(p=>!/^[^/.][^/]*(?:\/[^/.][^/]*)*$/.test(p)))throw new Error('Scope and exclusions are vault-relative paths');
+ if((scope.length||excluded.size||values.has('--media-dir'))&&values.get('--format')!=='forest')throw new Error('Scoped projection requires --format forest');
  if(!values.has('--vault')||!values.has('--out'))throw new Error('Both --vault and --out are required');
  if(values.has('--format')&&values.get('--format')!=='forest')throw new Error('Unsupported output format');
  const forestFormat=values.get('--format')==='forest';
@@ -78,14 +103,31 @@ async function main():Promise<void>{
    const p=join(dir,entry.name);
    if(entry.isSymbolicLink())continue;
    if(entry.isDirectory())await walk(p);
-   else if(entry.isFile()&&entry.name.endsWith('.md'))paths.push(p);
+   else if(entry.isFile()&&(entry.name.endsWith('.md')||(scope.length&&/\.jpe?g$/i.test(entry.name))))paths.push(p);
   }
  };
  await walk(vault);paths.sort();
- const docs=[];
- for(const path of paths)docs.push(parseHybrid(relative(vault,path).split('\\').join('/'),await readFile(path,'utf8'),options));
+ const docs=[],images=new Map<string,PublicJpeg>(),published=new Map<string,Uint8Array>();
+ let unusable=false;
+ for(const path of paths){
+  const rel=relative(vault,path).split('\\').join('/');
+  if(/\.jpe?g$/i.test(rel)){
+   // Only in-scope attachments can be published; others stay unresolved.
+   if(!within(rel,scope)||excluded.has(rel))continue;
+   const clean=sanitizeJpeg(new Uint8Array(await readFile(path)));
+   if(!clean){unusable=true;continue;}
+   const sha256=createHash('sha256').update(clean.bytes).digest('hex');
+   images.set(rel,{sha256,mime:'image/jpeg',bytes:clean.bytes.length,width:clean.width,height:clean.height});
+   published.set(sha256,clean.bytes);
+   continue;
+  }
+  const document=parseHybrid(rel,await readFile(path,'utf8'),options);
+  if(scope.length&&(!within(rel,scope)||excluded.has(rel)))confine(document);
+  docs.push(document);
+ }
  const index=indexHybrid(docs);
- const structured=forestFormat?projectPublicForest(index):undefined;
+ const structured=forestFormat?projectPublicForest(index,scope.length?{images}:undefined):undefined;
+ if(structured&&unusable)structured.diagnostics.push({code:'unsupported-image',message:'公開できない画像形式があります。',path:'',severity:'error'});
  const projection=structured?{trees:structured.forest.trees,diagnostics:structured.diagnostics}:projectPublic(index);
  if(projection.diagnostics.some(d=>d.severity==='error')){
   // Projection diagnostics are intentionally source-free. Never echo YAML errors or private paths.
@@ -97,6 +139,13 @@ async function main():Promise<void>{
  await mkdir(dirname(out),{recursive:true});
  if(await canonicalOutput(out,vault)!==out)throw new Error('Output namespace changed');
  const temporary=out+'.'+randomUUID()+'.tmp';
+ if(structured&&structured.forest.assets.length){
+  // A fresh media directory only: never merge with stale images.
+  if(!values.has('--media-dir'))throw new Error('Placed images require --media-dir');
+  const media=dirname(await canonicalOutput(join(resolve(values.get('--media-dir')!),'placeholder.json'),vault));
+  await mkdir(media,{mode:0o700});
+  for(const asset of structured.forest.assets)await writeFile(join(media,asset.sha256+'.jpg'),published.get(asset.sha256)!,{flag:'wx',mode:0o600});
+ }
  try{await writeFile(temporary,JSON.stringify(structured?structured.forest:{format:'forester-public-v1',trees:projection.trees},null,2)+'\n',{flag:'wx',mode:0o600});await rename(temporary,out);}finally{await rm(temporary,{force:true});}
  process.stdout.write(JSON.stringify({status:'ok',publicTrees:projection.trees.length})+'\n');
 }

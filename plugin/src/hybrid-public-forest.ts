@@ -1,9 +1,39 @@
 import type { HybridDiagnostic, HybridDocument, HybridIndex, HybridTree, SourceRange } from './hybrid-types';
-import type { PublicAttribution, PublicForestNode, PublicForestProjection, PublicForestTree } from './hybrid-public-forest-types';
+import type { PublicAttribution, PublicForestNode, PublicForestProjection, PublicForestTree, PublicImageCatalog, PublicJpeg } from './hybrid-public-forest-types';
 import { resolveHybrid } from './hybrid-core';
 import { error, LINKS, markdown, privateImageRanges, publicBibliography, publicIndexDiagnostics, referenceText, safeExternalUrl, safeLive } from './hybrid-public';
 
-function chunk(document: HybridDocument, tree: HybridTree, index: HybridIndex, diagnostics: HybridDiagnostic[], source: string): PublicForestTree['content'] {
+/** Images the projection placed, keyed by digest; only these enter the asset registry. */
+type PlacedImages = Map<string, PublicJpeg>;
+
+/** Obsidian-style attachment lookup restricted to the caller's vetted catalog. */
+function catalogImage(catalog: PublicImageCatalog | undefined, target: string, fromPath: string): PublicJpeg | undefined {
+  if (!catalog) return undefined;
+  const wanted = target.toLowerCase();
+  const directory = fromPath.includes('/') ? fromPath.slice(0, fromPath.lastIndexOf('/') + 1).toLowerCase() : '';
+  const matches = [...catalog.images].filter(([path]) => {
+    const lower = path.toLowerCase();
+    return wanted.includes('/') ? lower === wanted || lower === directory + wanted : lower.split('/').pop() === wanted;
+  });
+  return matches.length === 1 ? matches[0][1] : undefined;
+}
+
+/**
+ * An Obsidian block reference (file#^block) is not a tree identity, so it does
+ * not resolve as one. It is still a known private placement when the file
+ * resolves uniquely to a wholly private note that really carries that block.
+ */
+function privateBlock(index: HybridIndex, target: string, fromPath: string): boolean {
+  const match = /^([^#]+)#\^([A-Za-z0-9-]+)$/.exec(target);
+  if (!match) return false;
+  const file = resolveHybrid(index, match[1], fromPath);
+  if (file.status !== 'resolved' || file.tree !== file.document.root) return false;
+  if (file.document.enabled && file.document.trees.some(tree => tree.meta.publish)) return false;
+  return new RegExp(`(?:^|[ \\t])\\^${match[2]}[ \\t]*$`, 'm').test(file.document.source);
+}
+
+function chunk(document: HybridDocument, tree: HybridTree, index: HybridIndex, diagnostics: HybridDiagnostic[], source: string,
+  catalog?: PublicImageCatalog, placed: PlacedImages = new Map()): PublicForestTree['content'] {
   const content: PublicForestTree['content'] = [];
   // Keep physical offsets across scanner callbacks: an inline literal is content,
   // not an artificial end of line. Comments cannot join formerly separate tokens.
@@ -137,9 +167,25 @@ function chunk(document: HybridDocument, tree: HybridTree, index: HybridIndex, d
         const letters = flags[1] ?? '';
         if (/[^ht]/.test(letters)) diagnostics.push(error('unsupported-transclusion-flags', '未対応の埋め込みフラグです。'));
         const destination = target.split('|')[0];
+        const alias = target.includes('|') ? target.slice(target.indexOf('|') + 1) : undefined;
         const resolved = resolveHybrid(index, destination, document.path);
-        if (/\.[A-Za-z0-9]+(?:#.*)?$/.test(destination) && !/\.md(?:#.*)?$/i.test(destination))
+        const image = /\.jpe?g$/i.test(destination) ? catalogImage(catalog, destination, document.path) : undefined;
+        if (image) {
+          // Only a caller-vetted, sanitized JPEG; its alt is a literal, never a size or directive.
+          if (letters || (alias !== undefined && (/^\d+(?:x\d+)?$/.test(alias) || /<!--|%%|#\{|\\[A-Za-z<{]|[\u0000-\u001f\u007f]/.test(alias))))
+            diagnostics.push(error('unsupported-image-embed', '未対応の画像埋め込み指定です。'));
+          else {
+            flush();
+            placed.set(image.sha256, image);
+            content.push({ kind: 'image', sha256: image.sha256, alt: alias ?? '' });
+          }
+        }
+        else if (/\.[A-Za-z0-9]+(?:#.*)?$/.test(destination) && !/\.md(?:#.*)?$/i.test(destination))
           diagnostics.push(error('unvetted-asset', '検証済み公開マニフェストのないアセットは公開できません。'));
+        else if (resolved.status !== 'resolved' && privateBlock(index, destination, document.path)) {
+          flush();
+          content.push({ kind: 'unavailable' });
+        }
         else if (resolved.status !== 'resolved') diagnostics.push(error('unresolved-reference', '公開参照先を一意に確認できません。'));
         else if (!resolved.document.enabled || !resolved.tree.meta.publish) {
           flush();
@@ -351,7 +397,8 @@ function validateGraph(trees: PublicForestTree[], diagnostics: HybridDiagnostic[
 }
 
 /** The index, never link reachability, supplies publication authority. */
-export function projectPublicForest(index: HybridIndex): PublicForestProjection {
+export function projectPublicForest(index: HybridIndex, catalog?: PublicImageCatalog): PublicForestProjection {
+  const placed: PlacedImages = new Map();
   const diagnostics = publicIndexDiagnostics(index);
   const trees: PublicForestTree[] = [];
   if (!diagnostics.length) for (const document of index.documents.values()) {
@@ -378,7 +425,7 @@ export function projectPublicForest(index: HybridIndex): PublicForestProjection 
             cursor = Math.min(to, Math.max(cursor, range.to));
           }
           source += document.source.slice(cursor, to);
-          content.push(...chunk(document, node, index, diagnostics, source));
+          content.push(...chunk(document, node, index, diagnostics, source, catalog, placed));
         };
         let cursor = node.contentFrom;
         for (const child of [...node.children].sort((a, b) => a.from - b.from)) {
@@ -396,5 +443,6 @@ export function projectPublicForest(index: HybridIndex): PublicForestProjection 
   }
   if (!diagnostics.length) validateGraph(trees, diagnostics);
   trees.sort((a, b) => a.id! < b.id! ? -1 : a.id! > b.id! ? 1 : 0);
-  return { forest: { schema: 'forester-public-v2', trees: diagnostics.length ? [] : trees, assets: [] }, diagnostics };
+  const assets = diagnostics.length ? [] : [...placed.values()].sort((a, b) => a.sha256 < b.sha256 ? -1 : a.sha256 > b.sha256 ? 1 : 0);
+  return { forest: { schema: 'forester-public-v2', trees: diagnostics.length ? [] : trees, assets }, diagnostics };
 }
