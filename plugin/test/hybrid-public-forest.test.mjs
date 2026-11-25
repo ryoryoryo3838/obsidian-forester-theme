@@ -304,3 +304,33 @@ test('v0.6: parseEmbedFlags reads flags only when every word is a flag', async (
   assert.equal(parseEmbedFlags('-x'), undefined);
   assert.equal(parseEmbedFlags(''), undefined);
 });
+
+const literature = (key, extra = '') => doc(`Source/@${key}.md`, `---\nzotflow-locked: true\nzotero-key: CANARY-ZKEY\nlibrary-id: 14272705\ncitationKey: ${key}\ntitle: Basic concepts\ncreators:\n  - Bates Marcia\n  - 阿久津 達矢\npublication: Facet\nyear: 2018\ndoi: 10.29085/1\nurl: https://doi.org/10.29085/1\ntags:\n  - "#relevance:CANARY-TAG"\n${extra}---\n# Basic concepts\nCANARY-NOTE-BODY\n`);
+
+test('v0.6: a public link to a literature note publishes only its bibliographic Reference tree', () => {
+  const a = publicDoc('As [[@BasicConcepts2018]] and [[@BasicConcepts2018|Bates]] argue.\n');
+  const result = project(a, literature('BasicConcepts2018'), literature('Uncited2020'));
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(result.forest.trees.map(t => t.id), ['BasicConcepts2018', 'PUBLICA']);
+  assert.equal(text(result.forest.trees[1]), 'As [[BasicConcepts2018|Basic concepts]] and [[BasicConcepts2018|Bates]] argue.');
+  assert.deepEqual(result.forest.trees[0], {
+    id: 'BasicConcepts2018', title: 'Basic concepts', taxon: 'Reference',
+    authors: [{ kind: 'literal', value: 'Bates Marcia' }, { kind: 'literal', value: '阿久津 達矢' }],
+    dates: [], contributors: [], properties: { venue: ['Facet'], doi: ['10.29085/1'], external: ['https://doi.org/10.29085/1'] },
+    citationAuthors: [], publicationYear: '2018', content: [],
+  });
+  assert.ok(!JSON.stringify(result).includes('CANARY'));
+  assert.ok(!JSON.stringify(result).includes('Uncited2020'));
+});
+
+test('v0.6: a citationKey that cannot be a public ID is refused when cited', () => {
+  blocked(project(publicDoc('See [[@Bad_Key]].\n'), literature('Bad_Key')), 'unaddressable-reference');
+});
+
+test('v0.6: a private note without zotflow keys stays [非公開] even with a citationKey', () => {
+  const fake = doc('Private.md', '---\ncitationKey: Fake2020\ntitle: CANARY-TITLE\n---\nCANARY-BODY\n');
+  const result = project(publicDoc('See [[Private]].\n'), fake);
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(result.forest.trees.map(t => t.id), ['PUBLICA']);
+  assert.ok(!JSON.stringify(result).includes('CANARY'));
+});

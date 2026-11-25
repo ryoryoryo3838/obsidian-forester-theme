@@ -32,8 +32,46 @@ function privateBlock(index: HybridIndex, target: string, fromPath: string): boo
   return new RegExp(`(?:^|[ \\t])\\^${match[2]}[ \\t]*$`, 'm').test(file.document.source);
 }
 
+/** Bibliographic Reference trees for literature notes that public trees cite, keyed by citationKey. */
+type CitedReferences = Map<string, PublicForestTree>;
+
+/**
+ * A zotflow literature note (`citationKey` and `zotero-key` in its frontmatter)
+ * stays private, but when a public tree links to it, it is published as a
+ * Reference tree holding only bibliographic fields: never its body, tags,
+ * Zotero keys or anything else in the note. Citing it in public is the
+ * author's explicit act of naming the work.
+ */
+function citedReference(resolved: ReturnType<typeof resolveHybrid>, diagnostics: HybridDiagnostic[], cited: CitedReferences): PublicForestTree | undefined {
+  if (resolved.status !== 'resolved' || resolved.tree !== resolved.document.root || resolved.tree.meta.publish) return undefined;
+  const fm = resolved.document.frontmatter;
+  if (typeof fm.citationKey !== 'string' || !Object.prototype.hasOwnProperty.call(fm, 'zotero-key')) return undefined;
+  const id = fm.citationKey;
+  if (!/^[A-Za-z0-9-]+$/.test(id)) {
+    diagnostics.push(error('unaddressable-reference', `引用した文献の citationKey（${id}）は公開IDに使えない文字を含みます。`));
+    return undefined;
+  }
+  const known = cited.get(id);
+  if (known) return known;
+  const text = (value: unknown): string | undefined => typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  const title = text(fm.title);
+  if (!title) { diagnostics.push(error('missing-citation-metadata', '引用した文献にタイトルがありません。')); return undefined; }
+  const creators = Array.isArray(fm.creators) ? fm.creators.map(text).filter((v): v is string => !!v) : [];
+  const year = typeof fm.year === 'number' && Number.isFinite(fm.year) ? String(fm.year) : text(fm.year);
+  const properties: Record<string, string[]> = {};
+  const venue = text(fm.publication), doi = text(fm.doi), url = text(fm.url);
+  if (venue) properties.venue = [venue];
+  if (doi) properties.doi = [doi];
+  if (url && safeExternalUrl(url)) properties.external = [url];
+  for (const value of [title, ...creators, venue ?? '', doi ?? '', year ?? '']) literalMetadata(value, diagnostics);
+  const reference: PublicForestTree = { id, title, taxon: 'Reference', authors: creators.map(value => ({ kind: 'literal', value })),
+    dates: [], contributors: [], properties, citationAuthors: [], ...(year ? { publicationYear: year } : {}), content: [] };
+  cited.set(id, reference);
+  return reference;
+}
+
 function chunk(document: HybridDocument, tree: HybridTree, index: HybridIndex, diagnostics: HybridDiagnostic[], source: string,
-  catalog?: PublicImageCatalog, placed: PlacedImages = new Map()): PublicForestTree['content'] {
+  catalog?: PublicImageCatalog, placed: PlacedImages = new Map(), cited: CitedReferences = new Map()): PublicForestTree['content'] {
   const content: PublicForestTree['content'] = [];
   // Keep physical offsets across scanner callbacks: an inline literal is content,
   // not an artificial end of line. Comments cannot join formerly separate tokens.
@@ -213,6 +251,14 @@ function chunk(document: HybridDocument, tree: HybridTree, index: HybridIndex, d
       if (ordinaryTarget !== undefined && citation === undefined && !safeExternalUrl(ordinaryTarget) &&
           !(/\.[A-Za-z0-9]+(?:#.*)?$/.test(ordinaryTarget) && !/\.md(?:#.*)?$/i.test(ordinaryTarget))) {
         const resolved = resolveHybrid(index, ordinaryTarget, document.path);
+        const work = citedReference(resolved, diagnostics, cited);
+        if (work) {
+          const written = target?.includes('|') ? target.slice(target.indexOf('|') + 1) : label;
+          const shown = written !== undefined && written.trim() ? written : work.title;
+          literalMetadata(shown, diagnostics);
+          pending += `[[${work.id}|${shown.replace(/[[\]|]/g, ' ')}]]`;
+          continue;
+        }
         const start = source.lastIndexOf('\n', from + match.index - 1) + 1;
         const newline = source.indexOf('\n', from + cursor);
         const end = newline < 0 ? source.length : newline;
@@ -408,6 +454,7 @@ function validateGraph(trees: PublicForestTree[], diagnostics: HybridDiagnostic[
 /** The index, never link reachability, supplies publication authority. */
 export function projectPublicForest(index: HybridIndex, catalog?: PublicImageCatalog): PublicForestProjection {
   const placed: PlacedImages = new Map();
+  const cited: CitedReferences = new Map();
   const diagnostics = publicIndexDiagnostics(index);
   const trees: PublicForestTree[] = [];
   if (!diagnostics.length) for (const document of index.documents.values()) {
@@ -434,7 +481,7 @@ export function projectPublicForest(index: HybridIndex, catalog?: PublicImageCat
             cursor = Math.min(to, Math.max(cursor, range.to));
           }
           source += document.source.slice(cursor, to);
-          content.push(...chunk(document, node, index, diagnostics, source, catalog, placed));
+          content.push(...chunk(document, node, index, diagnostics, source, catalog, placed, cited));
         };
         let cursor = node.contentFrom;
         for (const child of [...node.children].sort((a, b) => a.from - b.from)) {
@@ -449,6 +496,15 @@ export function projectPublicForest(index: HybridIndex, catalog?: PublicImageCat
       };
       trees.push(build(tree, true));
     }
+  }
+  // Cited literature joins as its own Reference roots; an ID already public is a collision, never a choice.
+  const publicIds = new Set<string>();
+  const collect = (tree: PublicForestTree) => { if (tree.id) publicIds.add(tree.id.toLowerCase());
+    for (const node of tree.content) if (node.kind === 'subtree') collect(node.tree); };
+  trees.forEach(collect);
+  for (const reference of cited.values()) {
+    if (publicIds.has(reference.id!.toLowerCase())) diagnostics.push(error('id-collision', `引用した文献の citationKey（${reference.id}）が公開ツリーのIDと衝突します。`));
+    else trees.push(reference);
   }
   if (!diagnostics.length) validateGraph(trees, diagnostics);
   trees.sort((a, b) => a.id! < b.id! ? -1 : a.id! > b.id! ? 1 : 0);
