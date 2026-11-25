@@ -15,7 +15,9 @@ export interface PublicForestTree {
 }
 export type PublicForestNode = { kind: 'markdown'; text: string }
   | { kind: 'subtree'; tree: PublicForestTree }
-  | { kind: 'transclude'; id: string; header: boolean; toc: boolean }
+  // numbered/expanded/metadata appear only when they depart from Forester's
+  // defaults (true/true/false), so existing snapshots keep their bytes.
+  | { kind: 'transclude'; id: string; header: boolean; toc: boolean; numbered?: false; expanded?: false; metadata?: true }
   // Closed, source-free link: /_unavailable/, default literal label [非公開].
   // Optional label requires independent semantic public-title authorization.
   | { kind: 'unavailable'; label?: string }

@@ -1,6 +1,6 @@
 import type { HybridDiagnostic, HybridDocument, HybridIndex, HybridTree, SourceRange } from './hybrid-types';
 import type { PublicAttribution, PublicForestNode, PublicForestProjection, PublicForestTree, PublicImageCatalog, PublicJpeg } from './hybrid-public-forest-types';
-import { resolveHybrid } from './hybrid-core';
+import { DEFAULT_EMBED_FLAGS, parseEmbedFlags, resolveHybrid } from './hybrid-core';
 import { error, LINKS, markdown, privateImageRanges, publicBibliography, publicIndexDiagnostics, referenceText, safeExternalUrl, safeLive } from './hybrid-public';
 
 /** Images the projection placed, keyed by digest; only these enter the asset registry. */
@@ -193,8 +193,17 @@ function chunk(document: HybridDocument, tree: HybridTree, index: HybridIndex, d
         }
         else if (!resolved.tree.id) diagnostics.push(error('unresolved-reference', '公開参照先を一意に確認できません。'));
         else {
-          flush();
-          content.push({ kind: 'transclude', id: resolved.tree.id, header: !letters.includes('h'), toc: !letters.includes('t') });
+          // v0.6 flags after `|`; v0.5 `%%ht%%` still reads, but not both at once.
+          const parsed = alias !== undefined ? parseEmbedFlags(alias) : undefined;
+          if (parsed?.error) diagnostics.push(error('conflicting-transclusion-flags', '同じ埋め込みフラグが重複しています。'));
+          else if (parsed && letters) diagnostics.push(error('unsupported-transclusion-flags', '埋め込みフラグは | の後ろか %% のどちらか一方に書いてください。'));
+          else {
+            const flags = parsed?.flags ?? { ...DEFAULT_EMBED_FLAGS, heading: !letters.includes('h'), toc: !letters.includes('t') };
+            flush();
+            content.push({ kind: 'transclude', id: resolved.tree.id, header: flags.heading, toc: flags.toc,
+              ...(flags.numbered ? {} : { numbered: false as const }), ...(flags.expanded ? {} : { expanded: false as const }),
+              ...(flags.metadata ? { metadata: true as const } : {}) });
+          }
         }
         cursor = endOfLine < 0 ? end : end + 1;
         tokens.lastIndex = cursor;

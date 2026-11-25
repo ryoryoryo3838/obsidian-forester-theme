@@ -524,6 +524,34 @@ function consumeMetadata(tree: HybridTree, source: string, diagnostics: HybridDi
   }
 }
 
+/** Forester 6.0 transclusion flags (`default_section_flags`); only departures are written. */
+export interface EmbedFlags { heading: boolean; toc: boolean; numbered: boolean; expanded: boolean; metadata: boolean; }
+export const DEFAULT_EMBED_FLAGS: EmbedFlags = { heading: true, toc: true, numbered: true, expanded: true, metadata: false };
+const embedFlagNames: Record<string, keyof EmbedFlags> = {
+  heading: 'heading', h: 'heading', toc: 'toc', t: 'toc', numbered: 'numbered', n: 'numbered',
+  expanded: 'expanded', e: 'expanded', metadata: 'metadata', m: 'metadata',
+};
+
+/**
+ * v0.6 embed flags after `|` in `![[target|-h -t +m]]`. The text is flags only
+ * when every space-separated word is `+name` or `-name`; otherwise it is an
+ * ordinary alias and this returns `undefined`. A flag given twice, or both ways,
+ * is an error rather than a silent choice.
+ */
+export function parseEmbedFlags(text: string): { flags: EmbedFlags; error?: string } | undefined {
+  const words = text.trim().split(/[ \t]+/);
+  if (!text.trim() || !words.every(word => /^[+-][a-z]+$/.test(word) && Object.prototype.hasOwnProperty.call(embedFlagNames, word.slice(1)))) return undefined;
+  const flags = { ...DEFAULT_EMBED_FLAGS };
+  const seen = new Set<keyof EmbedFlags>();
+  for (const word of words) {
+    const name = embedFlagNames[word.slice(1)];
+    if (seen.has(name)) return { flags, error: `The embed flag ${name} is given more than once` };
+    seen.add(name);
+    flags[name] = word[0] === '+';
+  }
+  return { flags };
+}
+
 /** Parse default-on Markdown without rewriting source; exclusions remain ordinary Markdown. */
 export function parseHybrid(path: string, source: string, options: HybridOptions): HybridDocument {
   const diagnostics: HybridDiagnostic[] = [];

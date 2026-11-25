@@ -271,3 +271,36 @@ test('private public-title links cannot leak hidden title comments', () => {
   const privateDoc = doc('Secret.md','---\nforester-id: PRIVATE\ntitle: "Approved <!-- CANARY-HIDDEN -->"\npublic-title: true\n---\nCANARY');
   blocked(project(publicDoc('[[PRIVATE]]'),privateDoc),'unsupported-public-metadata');
 });
+
+test('v0.6: embed flags after | map to Forester transclusion flags, long or short', () => {
+  const target = doc('Target.md', '---\nforester-id: TARGET\ntitle: Target\npublish: true\n---\nT.\n');
+  const a = publicDoc('![[Target]]\n\n![[Target|-h -t]]\n\n![[Target|-numbered -expanded +metadata]]\n\n![[Target|+h -n]]\n\n![[Target|表示名]]\n');
+  const result = project(a, target);
+  assert.deepEqual(result.diagnostics, []);
+  const placements = result.forest.trees.find(t => t.id === 'PUBLICA').content.filter(n => n.kind === 'transclude');
+  assert.deepEqual(placements, [
+    { kind: 'transclude', id: 'TARGET', header: true, toc: true },
+    { kind: 'transclude', id: 'TARGET', header: false, toc: false },
+    { kind: 'transclude', id: 'TARGET', header: true, toc: true, numbered: false, expanded: false, metadata: true },
+    { kind: 'transclude', id: 'TARGET', header: true, toc: true, numbered: false },
+    { kind: 'transclude', id: 'TARGET', header: true, toc: true },
+  ]);
+});
+
+for (const [name, body, code] of [
+  ['the same flag twice', '![[Target|-h -heading]]\n', 'conflicting-transclusion-flags'],
+  ['a flag both ways', '![[Target|+t -t]]\n', 'conflicting-transclusion-flags'],
+  ['| flags with a v0.5 %%ht%%', '![[Target|-h]] %%t%%\n', 'unsupported-transclusion-flags'],
+]) test(`v0.6: embed flags refuse ${name}`, () => {
+  const target = doc('Target.md', '---\nforester-id: TARGET\ntitle: Target\npublish: true\n---\nT.\n');
+  blocked(project(publicDoc(body), target), code);
+});
+
+test('v0.6: parseEmbedFlags reads flags only when every word is a flag', async () => {
+  const { parseEmbedFlags } = await import('./build/hybrid-core.mjs');
+  assert.deepEqual(parseEmbedFlags('-h +m')?.flags, { heading: false, toc: true, numbered: true, expanded: true, metadata: true });
+  assert.equal(parseEmbedFlags('-h alias'), undefined);
+  assert.equal(parseEmbedFlags('100x145'), undefined);
+  assert.equal(parseEmbedFlags('-x'), undefined);
+  assert.equal(parseEmbedFlags(''), undefined);
+});
