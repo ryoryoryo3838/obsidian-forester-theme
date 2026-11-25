@@ -701,3 +701,23 @@ test('automatic heading IDs preserve protected regions, manual identities, BOM a
 });
 
 // End of hybrid-core regression suite.
+
+test('v0.6: a leading italic word ending in a period is the heading taxon', () => {
+  const doc = parse('# Root\n## *Claim.* 情報の定義 ^claim-001\nA\n## _定義._ 情報\nB\n## *Reading note.* 二語\nC\n## Vol. 2\nD\n## *強調* だけ\nE\n## `*Code.*` literal\nF\n## *Claim.*\nG\n');
+  const [, claim, japanese, twoWords, volume, emphasis, code, bare] = doc.trees;
+  assert.deepEqual([claim.meta.taxon, claim.meta.title, claim.id], ['Claim', '情報の定義', 'claim-001']);
+  assert.deepEqual([japanese.meta.taxon, japanese.meta.title], ['定義', '情報']);
+  assert.deepEqual([twoWords.meta.taxon, twoWords.meta.title], ['Reading note', '二語']);
+  assert.deepEqual([volume.meta.taxon, volume.meta.title], [undefined, 'Vol. 2']);
+  assert.deepEqual([emphasis.meta.taxon, emphasis.meta.title], [undefined, '*強調* だけ']);
+  assert.equal(code.meta.taxon, undefined);
+  assert.deepEqual([bare.meta.taxon, bare.meta.title], ['Claim', '']);
+  assert.ok(!doc.diagnostics.some(d => d.code === 'legacy-taxon-tag'));
+});
+
+test('v0.6: the v0.5 taxon tag still parses but warns to migrate', () => {
+  const doc = parse('# Root\n## 古い書式 #Ref\nA\n');
+  assert.equal(doc.trees[1].meta.taxon, 'Reference');
+  const warning = doc.diagnostics.find(d => d.code === 'legacy-taxon-tag');
+  assert.equal(warning?.severity, 'warning');
+});

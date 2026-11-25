@@ -372,13 +372,21 @@ const taxonAliases = new Map([['ref', 'Reference'], ['reference', 'Reference'], 
 const knownTaxon = (tag: string): string | undefined => taxonAliases.get(tag.toLowerCase());
 const tagLine = /^(#[\p{L}\p{N}_/-]+)(?:[ \t]+#[\p{L}\p{N}_/-]+)*[ \t]*$/u;
 
+// v0.6: a heading that opens with an italic word ending in a period names its
+// taxon, as Forester itself renders it ("Claim. Title"). Only the syntax
+// decides, so "Vol. 2" stays a title unless the author italicizes it.
+const italicTaxon = /^(\*|_)([^\s*_.](?:[^*_.]*[^\s*_.])?)\.\1(?:[ \t]+|$)/u;
+
 function headingTaxon(title: string, safeTitle: string, path: string, line: number, diagnostics: HybridDiagnostic[]): { title: string; taxon?: string } {
+  const italic = italicTaxon.exec(safeTitle);
+  if (italic) return { title: title.slice(italic[0].length).trim(), taxon: italic[2] };
   const tags: { tag: string; from: number; to: number }[] = [];
   const matcher = /(?:^|\s)#([\p{L}\p{N}_/-]+)(?=\s|$)/gu;
   let match: RegExpExecArray | null;
   while ((match = matcher.exec(safeTitle))) if (knownTaxon(match[1])) tags.push({ tag: match[1], from: match.index, to: matcher.lastIndex });
   if (tags.length === 1) {
     const tag = tags[0];
+    diagnostics.push({ code: 'legacy-taxon-tag', message: `Write the taxon as *${knownTaxon(tag.tag)}.* at the start of the heading`, path, line, severity: 'warning' });
     return { title: (title.slice(0, tag.from) + title.slice(tag.to)).trim(), taxon: knownTaxon(tag.tag) };
   }
   if (tags.length > 1) diagnostics.push({ code: 'ambiguous-taxon', message: 'Heading has multiple taxon tags', path, line, severity: 'warning' });
