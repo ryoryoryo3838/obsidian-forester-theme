@@ -53,13 +53,14 @@ for (const newline of ['\n', '\r\n']) {
   });
 }
 
-test('private shorthand preserves the existing explicit public-island override', () => {
-  const doc = parse(prefix + '## PRIVATE-TITLE-CANARY ^PRIVATE\n%%p%%\nPRIVATE-BODY-CANARY\n### Approved island ^ISLAND\n%% publish: true %%\nApproved body.\n### PRIVATE-SIBLING-TITLE-CANARY ^SIBLING\nPRIVATE-SIBLING-BODY-CANARY\n');
-  assert.deepEqual(doc.trees.map(tree => tree.meta.publish), [true, false, true, false]);
+test('v0.6: an explicit private shorthand reaches below it, so a nested public marker has no effect', () => {
+  const doc = parse(prefix + '## PRIVATE-TITLE-CANARY ^PRIVATE\n%%p%%\nPRIVATE-BODY-CANARY\n### Former island ^ISLAND\n%% publish: true %%\nISLAND-BODY-CANARY\n### PRIVATE-SIBLING-TITLE-CANARY ^SIBLING\nPRIVATE-SIBLING-BODY-CANARY\n');
+  assert.deepEqual(doc.trees.map(tree => tree.meta.publish), [true, false, false, false]);
   const projection = projectPublic(indexHybrid([doc]));
   assert.deepEqual(projection.diagnostics, []);
-  assert.ok(projection.trees.some(tree => tree.id === 'ISLAND' && tree.body.includes('Approved body.')));
+  assert.ok(!projection.trees.some(tree => tree.id === 'ISLAND'));
   assert.ok(!JSON.stringify(projection).includes('CANARY'));
+  assert.ok(doc.diagnostics.some(d => d.code === 'public-in-private' && d.severity === 'warning'));
 });
 
 test('root shorthand overrides public folders and inherited children without granting title visibility', () => {

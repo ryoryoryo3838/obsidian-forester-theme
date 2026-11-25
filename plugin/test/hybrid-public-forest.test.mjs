@@ -34,11 +34,11 @@ test('PUBLICA links to an independently public ISLAND without private ancestor d
   assert.deepEqual(Object.keys(result.forest.trees[0]).sort(), ['authors', 'citationAuthors', 'content', 'contributors', 'dates', 'id', 'properties', 'title']);
 });
 
-test('named and anonymous definitions occur once in source order while private boundaries form separate islands', () => {
-  const result = project(publicDoc('Intro.\n## Named ^CHILD\n%% title: Child semantic, venue: Safe venue %%\nChild body.\n### Anonymous\nAnonymous body.\n## CANARY-PRIVATE ^HIDDEN\n%%p%%\nCANARY-BODY\n### Island ^ISLAND\n%% publish: true %%\nIsland body.\n## Last ^LAST\nLast body.\n'));
+test('named and anonymous definitions occur once in source order; v0.6 explicit private swallows nested public markers', () => {
+  const result = project(publicDoc('Intro.\n## Named ^CHILD\n%% title: Child semantic, venue: Safe venue %%\nChild body.\n### Anonymous\nAnonymous body.\n## CANARY-PRIVATE ^HIDDEN\n%%p%%\nCANARY-BODY\n### Island ^ISLAND\n%% publish: true %%\nCANARY-ISLAND\n## Last ^LAST\nLast body.\n'));
   assert.deepEqual(result.diagnostics, []);
-  assert.deepEqual(result.forest.trees.map(t => t.id), ['ISLAND', 'PUBLICA']);
-  const root = result.forest.trees[1];
+  assert.deepEqual(result.forest.trees.map(t => t.id), ['PUBLICA']);
+  const root = result.forest.trees[0];
   assert.deepEqual(root.content.map(n => n.kind), ['markdown', 'subtree', 'subtree']);
   assert.equal(text(root), 'Intro.');
   const child = root.content[1].tree;
@@ -52,7 +52,7 @@ test('named and anonymous definitions occur once in source order while private b
   const ids = [];
   const visit = tree => { if (tree.id) ids.push(tree.id); for (const n of tree.content) if (n.kind === 'subtree') visit(n.tree); };
   result.forest.trees.forEach(visit);
-  assert.deepEqual(ids.sort(), ['CHILD', 'ISLAND', 'LAST', 'PUBLICA']);
+  assert.deepEqual(ids.sort(), ['CHILD', 'LAST', 'PUBLICA']);
   assert.ok(!JSON.stringify(result).includes('CANARY'));
 });
 
@@ -153,10 +153,36 @@ test('metadata follows declaration visibility and nested trees emit only local n
   assert.deepEqual(child.dates, ['2026-10-09']);
   assert.deepEqual(child.contributors, [{kind:'tree',id:'PERSON'}]);
   assert.deepEqual(child.properties, {venue:['Safe venue']});
-  const island = result.forest.trees.find(t => t.id === 'ISLAND');
-  assert.deepEqual(island.authors, [{kind:'literal',value:'Parent literal'}, {kind:'tree',id:'PERSON'}, {kind:'literal',value:'Island literal'}]);
-  assert.deepEqual(island.dates, ['2026-10-08','2026-10-10']);
+  // v0.6: the island sits under an explicit private heading, so it is not published.
+  assert.equal(result.forest.trees.find(t => t.id === 'ISLAND'), undefined);
   assert.ok(!JSON.stringify(result).includes('CANARY'));
+});
+
+test('v0.6: a #public heading in an unmarked (default-private) note is a separate public root', () => {
+  const note = doc('Note.md', '---\nforester-id: NOTE\n---\n# Note\nCANARY-NOTE-BODY\n## Shared #public ^SHARED\nShared body.\n### Inner ^INNER\nInner body.\n## Hidden ^HIDDEN\nCANARY-HIDDEN\n');
+  const result = project(note);
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(result.forest.trees.map(t => t.id), ['SHARED']);
+  const shared = result.forest.trees[0];
+  assert.equal(shared.title, 'Shared');
+  assert.equal(text(shared), 'Shared body.');
+  assert.equal(shared.content.find(n => n.kind === 'subtree').tree.id, 'INNER');
+  assert.ok(!JSON.stringify(result).includes('CANARY'));
+});
+
+test('v0.6: #private on a heading, file tags and a folder note mark visibility at every level', () => {
+  const opts = { folders: [], publicFolders: [], reservedIds: [] };
+  const folderNote = parseHybrid('Pub/Pub.md', '---\ntags: [public]\nforester-id: PUB\ntitle: Pub\n---\nFolder body.\n', opts);
+  const inside = parseHybrid('Pub/In.md', '---\nforester-id: IN\ntitle: In\n---\nIn body.\n## Secret #private ^SECRET\nCANARY-SECRET\n### Below #public ^BELOW\nCANARY-BELOW\n', opts);
+  const privateFile = parseHybrid('Pub/Off.md', '---\nforester-id: OFF\ntitle: Off\ntags:\n  - "#private"\n---\nCANARY-OFF\n', opts);
+  const outside = parseHybrid('Other/Out.md', '---\nforester-id: OUT\ntitle: Out\n---\nCANARY-OUT\n', opts);
+  const result = projectPublicForest(indexHybrid([folderNote, inside, privateFile, outside]));
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(result.forest.trees.map(t => t.id), ['IN', 'PUB']);
+  assert.ok(!JSON.stringify(result).includes('CANARY'));
+  assert.deepEqual(inside.trees.map(t => t.meta.publish), [true, false, false]);
+  assert.equal(inside.trees[1].meta.title, 'Secret');
+  assert.ok(inside.diagnostics.some(d => d.code === 'public-in-private' && d.line === inside.trees[2].line));
 });
 
 for (const [name, meta, code] of [

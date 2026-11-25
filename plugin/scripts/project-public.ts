@@ -21,6 +21,8 @@ function confine(document:HybridDocument):void{
  document.diagnostics=[];
  for(const tree of document.trees){
   tree.meta.publish=false;tree.meta.publicTitle=false;
+  // Explicitly private, so indexHybrid's settlement cannot publish it again.
+  tree.meta.visibility='private';
   if(tree.id!==undefined&&!/^[A-Za-z0-9-]+$/.test(tree.id))tree.id=undefined;
  }
 }

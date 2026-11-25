@@ -20,7 +20,10 @@ export interface HybridMeta {
   citationAuthors: string[]; publicationYear?: string;
   /** These bibliographic fields were explicitly declared on this tree, not inherited. */
   citationAuthorsDeclared?: boolean; publicationYearDeclared?: boolean;
+  /** Effective publication, settled from every explicit marker on the folder/file/heading chain. */
   publish: boolean; publicTitle: boolean;
+  /** This tree's own explicit marker (v0.6 #public/#private tags; v0.5 publish/%%p%%), never inherited. */
+  visibility?: 'public' | 'private';
 }
 export interface HybridTree {
   key: string; id?: string; path: string; parentKey?: string; level: number;

@@ -8,6 +8,7 @@ import { encodeWikilinkLabel } from './hybrid-literal-label';
 
 // Preserve option-only reservations without extending the shared document contract.
 const reservations = new WeakMap<HybridDocument, readonly string[]>();
+const publicFolderSettings = new WeakMap<HybridDocument, readonly string[]>();
 const headingName = (tree: HybridTree): string | null => tree.headingTitle !== undefined ? tree.headingTitle : tree.meta.title;
 
 const has = (object: Record<string, unknown>, key: string): boolean => Object.prototype.hasOwnProperty.call(object, key);
@@ -321,13 +322,19 @@ function applyMetadata(tree: HybridTree, values: Record<string, unknown>, diagno
     diagnostics.push({ code: 'invalid-metadata', message: `${key} must be a string or list of strings`, path: tree.path, line: tree.line, severity: 'error' });
     return undefined;
   };
-  for (const key of ['publish', 'public-title'] as const) {
-    if (!has(values, key)) continue;
-    const property = key === 'publish' ? 'publish' : 'publicTitle';
-    if (typeof values[key] === 'boolean') tree.meta[property] = values[key] as boolean;
+  if (has(values, 'publish')) {
+    // v0.5 spelling of the v0.6 #public/#private marker; settled with the others.
+    if (typeof values.publish === 'boolean') mark(tree, values.publish ? 'public' : 'private', diagnostics);
     else {
-      tree.meta[property] = false;
-      diagnostics.push({ code: 'invalid-metadata', message: `${key} must be a boolean, not a string or another YAML type`, path: tree.path, line: tree.line, severity: 'error' });
+      tree.meta.visibility = 'private';
+      diagnostics.push({ code: 'invalid-metadata', message: 'publish must be a boolean, not a string or another YAML type', path: tree.path, line: tree.line, severity: 'error' });
+    }
+  }
+  if (has(values, 'public-title')) {
+    if (typeof values['public-title'] === 'boolean') tree.meta.publicTitle = values['public-title'] as boolean;
+    else {
+      tree.meta.publicTitle = false;
+      diagnostics.push({ code: 'invalid-metadata', message: 'public-title must be a boolean, not a string or another YAML type', path: tree.path, line: tree.line, severity: 'error' });
     }
   }
   tree.meta.authors = [...tree.meta.authors, ...(list('authors') ?? [])];
@@ -363,10 +370,73 @@ function applyMetadata(tree: HybridTree, values: Record<string, unknown>, diagno
     } else diagnostics.push({ code: 'invalid-metadata', message: 'publication-year must be a string or finite number', path: tree.path, line: tree.line, severity: 'error' });
   }
   if (diagnostics.some(d => d.path === tree.path && d.line === tree.line && d.severity === 'error' && (d.code === 'invalid-metadata' || d.code === 'invalid-frontmatter'))) {
-    tree.meta.publish = false;
+    tree.meta.visibility = 'private';
     tree.meta.publicTitle = false;
   }
 }
+
+/**
+ * Record one explicit marker. Both on the same tree is a contradiction, settled
+ * fail-closed as private and reported.
+ */
+function mark(tree: HybridTree, visibility: 'public' | 'private', diagnostics: HybridDiagnostic[]): void {
+  if (tree.meta.visibility && tree.meta.visibility !== visibility) {
+    diagnostics.push({ code: 'conflicting-visibility', message: 'A tree is marked both public and private', path: tree.path, line: tree.line, severity: 'error' });
+    tree.meta.visibility = 'private';
+  } else tree.meta.visibility = visibility;
+}
+
+const visibilityTag = /(?:^|\s)#(public|private)(?=\s|$)/giu;
+
+/** v0.6 #public/#private in a heading: a marker, removed from the title like the ID. */
+function headingVisibility(tree: HybridTree, title: string, safeTitle: string, diagnostics: HybridDiagnostic[]): { title: string; safeTitle: string } {
+  const ranges: [number, number][] = [];
+  let match: RegExpExecArray | null;
+  visibilityTag.lastIndex = 0;
+  while ((match = visibilityTag.exec(safeTitle))) {
+    mark(tree, match[1].toLowerCase() as 'public' | 'private', diagnostics);
+    ranges.push([match.index, visibilityTag.lastIndex]);
+  }
+  for (const [from, to] of ranges.reverse()) {
+    title = title.slice(0, from) + title.slice(to);
+    safeTitle = safeTitle.slice(0, from) + safeTitle.slice(to);
+  }
+  return { title: title.trim(), safeTitle: safeTitle.trim() };
+}
+
+/** OFM `tags` may be a list or one string; a leading # and case do not matter. */
+function fileTags(frontmatter: Record<string, unknown>): string[] {
+  const value = frontmatter.tags;
+  const items = Array.isArray(value) ? value : typeof value === 'string' ? value.split(/[,\s]+/) : [];
+  return items.filter((item): item is string => typeof item === 'string').map(item => item.replace(/^#/, '').toLowerCase());
+}
+
+/**
+ * Settle effective publication for every tree of a document. A tree is public
+ * only when some marker on its chain (enclosing folders, the file, enclosing
+ * headings, itself) is public and none is private: an explicit private reaches
+ * everything below it, while the unmarked default does not.
+ */
+function settlePublication(document: HybridDocument, folders: ('public' | 'private' | undefined)[], warn = false): void {
+  const byKey = new Map(document.trees.map(tree => [tree.key, tree]));
+  const base = { public: folders.includes('public'), private: folders.includes('private') };
+  for (const tree of document.trees) {
+    let isPublic = base.public, isPrivate = base.private;
+    for (let node: HybridTree | undefined = tree; node; node = node.parentKey ? byKey.get(node.parentKey) : undefined) {
+      if (node.meta.visibility === 'public') isPublic = true;
+      if (node.meta.visibility === 'private') isPrivate = true;
+    }
+    tree.meta.publish = document.enabled && isPublic && !isPrivate;
+    if (warn && tree.meta.visibility === 'public' && isPrivate &&
+        !document.diagnostics.some(d => d.code === 'public-in-private' && d.line === tree.line)) document.diagnostics.push({ code: 'public-in-private',
+      message: 'A public marker inside an explicitly private folder, file or heading has no effect', path: tree.path, line: tree.line, severity: 'warning' });
+  }
+}
+
+const folderChain = (path: string): string[] => {
+  const parts = path.split('/').slice(0, -1);
+  return parts.map((_, i) => parts.slice(0, i + 1).join('/'));
+};
 
 const taxonAliases = new Map([['ref', 'Reference'], ['reference', 'Reference'], ['person', 'Person']]);
 const knownTaxon = (tag: string): string | undefined => taxonAliases.get(tag.toLowerCase());
@@ -428,7 +498,7 @@ function consumeMetadata(tree: HybridTree, source: string, diagnostics: HybridDi
     if (!/^(?:forester(?:\s|$)|[\w-]+\s*:|\{)/.test(yaml)) return;
     if (close < 0) {
       diagnostics.push({ code: 'invalid-metadata', message: 'Unclosed Forester metadata comment', path: tree.path, line: tree.line, severity: 'error' });
-      tree.meta.publish = false;
+      tree.meta.visibility = 'private';
       tree.meta.publicTitle = false;
       tree.metadataRanges.push({ from: start, to: source.length });
       tree.contentFrom = source.length;
@@ -440,7 +510,7 @@ function consumeMetadata(tree: HybridTree, source: string, diagnostics: HybridDi
       applyMetadata(tree, readYamlMapping(yaml), diagnostics);
     } catch (error) {
       diagnostics.push({ code: 'invalid-metadata', message: error instanceof Error ? error.message : String(error), path: tree.path, line: tree.line, severity: 'error' });
-      tree.meta.publish = false;
+      tree.meta.visibility = 'private';
       tree.meta.publicTitle = false;
     }
     let end = close + 2;
@@ -478,14 +548,14 @@ export function parseHybrid(path: string, source: string, options: HybridOptions
       if (typeof id === 'string' && /^[A-Za-z0-9-]+$/.test(id)) root.id = id;
       else diagnostics.push({ code: 'invalid-id', message: 'forester-id must be a nonempty string of letters, digits or hyphens', path, line: 0, severity: 'error' });
     }
-    root.meta.publish = inFolders(path, options.publicFolders);
     root.contentFrom = fm.range?.to ?? (source.startsWith('\uFEFF') ? 1 : 0);
     root.metadataRanges = fm.range ? [fm.range] : [];
     const h1 = lines.find(line => line.from >= root.contentFrom && /^ {0,3}#[ \t]+/.test(line.text) && !overlaps(protectedRanges, line.from, line.from + line.text.indexOf('#') + 1));
     if (h1) {
-      const title = h1.text.replace(/^ {0,3}#[ \t]+/, '').replace(/[ \t]+#+[ \t]*$/, '').trim();
-      const from = h1.from + h1.text.indexOf(title, 1);
-      const classified = headingTaxon(title, maskSpan(source, from, from + title.length, protectedRanges), path, h1.line, diagnostics);
+      const written = h1.text.replace(/^ {0,3}#[ \t]+/, '').replace(/[ \t]+#+[ \t]*$/, '').trim();
+      const from = h1.from + h1.text.indexOf(written, 1);
+      const { title, safeTitle } = headingVisibility(root, written, maskSpan(source, from, from + written.length, protectedRanges), diagnostics);
+      const classified = headingTaxon(title, safeTitle, path, h1.line, diagnostics);
       root.meta.title = classified.title;
       root.meta.titleSource = 'heading';
       root.meta.taxon = classified.taxon;
@@ -494,6 +564,7 @@ export function parseHybrid(path: string, source: string, options: HybridOptions
     const fallbackTitle = root.meta.title;
     const fallbackTitleSource = root.meta.titleSource;
     applyMetadata(root, fm.value, diagnostics);
+    for (const tag of fileTags(fm.value)) if (tag === 'public' || tag === 'private') mark(root, tag, diagnostics);
     consumeMetadata(root, source, diagnostics);
     if (h1 && source.slice(root.contentFrom, h1.from).trim() === '' && root.contentFrom <= h1.from) {
       root.contentFrom = h1.end;
@@ -527,16 +598,17 @@ export function parseHybrid(path: string, source: string, options: HybridOptions
       }
       const id = anchor?.[1];
       if (anchor) { title = title.slice(0, anchor.index).trim(); safeTitle = safeTitle.slice(0, title.length); }
-      const classified = headingTaxon(title, safeTitle, path, line.line, diagnostics);
-      title = classified.title;
-      const taxon = classified.taxon;
       const parent = stack[stack.length - 1];
       const child: HybridTree = {
         key: `${path}:${line.from}`, id, path, parentKey: parent.key, level, line: line.line, headingTitle: title,
         endLine: lines.length, from: line.from, to: source.length, contentFrom: line.end,
-        meta: { title, titleSource: 'heading', taxon, authors: [...parent.meta.authors], dates: [...parent.meta.dates], citationAuthors: [], publish: parent.meta.publish, publicTitle: false }, metadataRanges: [], children: [],
+        meta: { title, titleSource: 'heading', authors: [...parent.meta.authors], dates: [...parent.meta.dates], citationAuthors: [], publish: false, publicTitle: false }, metadataRanges: [], children: [],
         number: [parent.number, String(parent.children.length + 1)].filter(Boolean).join('.'),
       };
+      ({ title, safeTitle } = headingVisibility(child, title, safeTitle, diagnostics));
+      const classified = headingTaxon(title, safeTitle, path, line.line, diagnostics);
+      child.meta.title = child.headingTitle = classified.title;
+      if (classified.taxon !== undefined) child.meta.taxon = classified.taxon;
       consumeMetadata(child, source, diagnostics);
       parent.children.push(child);
       trees.push(child);
@@ -545,6 +617,12 @@ export function parseHybrid(path: string, source: string, options: HybridOptions
   }
   const document: HybridDocument = { path, source, enabled, frontmatter: fm.value, root, trees, protectedRanges, raw, diagnostics };
   reservations.set(document, [...options.reservedIds]);
+  // Folder notes are other documents; indexHybrid settles again with them. A
+  // document whose syntax could not be parsed is never public, whatever its folder.
+  if (parseable) {
+    publicFolderSettings.set(document, [...options.publicFolders]);
+    settlePublication(document, [inFolders(path, options.publicFolders) ? 'public' : undefined]);
+  }
   return document;
 }
 
@@ -558,6 +636,19 @@ function aliases(document: HybridDocument): string[] {
 export function indexHybrid(documents: Iterable<HybridDocument>): HybridIndex {
   const indexed = new Map<string, HybridDocument>();
   for (const document of documents) indexed.set(document.path, document);
+  // A folder note (`A/B/B.md`) marks its folder with its own file-level marker.
+  const folderMarkers = new Map<string, 'public' | 'private'>();
+  for (const document of indexed.values()) {
+    const parts = document.path.split('/');
+    if (parts.length > 1 && document.enabled && stem(document.path) === parts[parts.length - 2] && document.root.meta.visibility)
+      folderMarkers.set(parts.slice(0, -1).join('/'), document.root.meta.visibility);
+  }
+  for (const document of indexed.values()) {
+    const settings = publicFolderSettings.get(document);
+    if (!settings) continue;
+    settlePublication(document, [inFolders(document.path, [...settings]) ? 'public' : undefined,
+      ...folderChain(document.path).map(folder => folderMarkers.get(folder))], true);
+  }
   const ids = new Map<string, HybridTree[]>();
   const diagnostics: HybridDiagnostic[] = [];
   for (const document of indexed.values()) {

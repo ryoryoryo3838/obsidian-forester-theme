@@ -135,8 +135,12 @@ test('publication permissions fail closed and only publish inherits, not public-
   const doc = parse('---\npublish: false\npublic-title: true\n---\n# R\n## Public exception\n%% publish: true %%\n### Inherit\nBody\n## Bad bool\n%% publish: "false", public-title: "true" %%\n', 'hybrid/P.md', { folders: ['hybrid'], publicFolders: ['hybrid'] });
   assert.equal(doc.root.meta.publish, false);
   assert.equal(doc.root.meta.publicTitle, true);
-  assert.equal(doc.trees[1].meta.publish, true);
-  assert.equal(doc.trees[2].meta.publish, true);
+  // v0.6: an explicit private file reaches every heading below it, so the
+  // v0.5 public island no longer publishes; the index reports the dead marker.
+  assert.equal(doc.trees[1].meta.publish, false);
+  assert.equal(doc.trees[2].meta.publish, false);
+  core.indexHybrid([doc]);
+  assert.ok(doc.diagnostics.some(d => d.code === 'public-in-private' && d.severity === 'warning' && d.line === doc.trees[1].line));
   assert.equal(doc.trees[1].meta.publicTitle, false);
   assert.equal(doc.trees[2].meta.publicTitle, false);
   assert.equal(doc.trees[3].meta.publish, false);

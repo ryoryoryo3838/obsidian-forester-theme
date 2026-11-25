@@ -239,9 +239,9 @@ test('preserving local native metadata does not extend the public projection con
     bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'warning',
   });
   const { projectPublic } = await import(`data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString('base64')}`);
+  // v0.6: the root is unmarked (default private), so its #public child can still be an island.
   const doc = parse(`---
 forester-id: PRIVATE
-publish: false
 contributors: PRIVATE-CONTRIBUTOR-CANARY
 institution: PRIVATE-INSTITUTION-CANARY
 author: false
