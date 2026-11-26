@@ -547,8 +547,9 @@ test('the [[ suggester is moved ahead of the built-in suggesters when Obsidian e
   const register = h.plugin.registerEditorSuggest.bind(h.plugin);
   h.plugin.registerEditorSuggest = suggest => { register(suggest); h.workspace.editorSuggest.suggests.push(suggest); };
   h.register();
-  const [slash, links] = h.plugin.suggests;
-  assert.deepEqual(h.workspace.editorSuggest.suggests, [links, builtIn, slash]);
+  // v0.6 adds the taxon suggester last; its heading-start `.` trigger overlaps no built-in one.
+  const [slash, links, taxa] = h.plugin.suggests;
+  assert.deepEqual(h.workspace.editorSuggest.suggests, [links, builtIn, slash, taxa]);
   const bare = harness(); bare.register();
-  assert.equal(bare.plugin.suggests.length, 2, 'without the private list, registration still succeeds');
+  assert.equal(bare.plugin.suggests.length, 3, 'without the private list, registration still succeeds');
 });

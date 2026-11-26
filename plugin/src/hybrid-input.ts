@@ -45,6 +45,9 @@ const slashCommands: SlashCommand[] = ['subtree', 'transclude', 'link'];
 const samePosition = (a: EditorPosition, b: EditorPosition): boolean => a.line === b.line && a.ch === b.ch;
 
 const suggestionLimit = 100;
+// A heading that opens with a period, typed or full-width: `## .Per` (suggest) / `## .Person.` (convert).
+const taxonQuery = /^( {0,3}#{1,6}[ \t]+)[.．。]([^\s.．。*_]*)$/;
+const taxonShorthand = /^( {0,3}#{1,6}[ \t]+)[.．。]([^\s.．。*_]+)[.．。]/;
 type SearchTree = { tree: HybridTree; source: string; fields: string[] };
 type SearchFile = { file: TFile; path: string; fields: string[] };
 const searchWords = (query: string): string[] => query.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -72,6 +75,7 @@ class InputSupport {
     plugin.registerEvent(workspace.on('editor-change', (editor, info) => {
       this.editorVersions.set(editor, (this.editorVersions.get(editor) ?? 0) + 1);
       this.syncBinding();
+      if (info?.file) this.convertTaxonShorthand(editor, info.file);
       if (info?.file && this.host.linkSuggest?.() !== false) this.normalizeIdLinks(editor, info.file);
     }));
     plugin.registerEvent(workspace.on('active-leaf-change', () => this.syncBinding()));
@@ -106,6 +110,44 @@ class InputSupport {
       this.searchTimer = setTimeout(() => { this.searchTimer = undefined; void this.prepareSearch(); }, 0);
     }));
     void this.prepareSearch();
+  }
+
+  /** Whether `offset` in this editor's text is code, a comment or other protected source. */
+  private protectedAt(editor: Editor, file: TFile, offset: number): boolean {
+    const draft = parseHybrid(file.path, editor.getValue(), { folders: ['/'], publicFolders: [], reservedIds: [] });
+    return !draft.enabled || [...draft.protectedRanges, ...draft.trees.flatMap(tree => tree.metadataRanges)]
+      .some(range => range.from <= offset && offset < range.to);
+  }
+
+  /**
+   * v0.6: typing `.Person.` at the start of a heading (the closing period just
+   * typed) becomes the taxon `*Person.* `. Full-width ．and 。 count as periods.
+   * `## .NET` has no closing period and stays a title.
+   */
+  convertTaxonShorthand(editor: Editor, file: TFile): void {
+    if (this.normalizing || (editor as unknown as { cm?: { composing?: boolean } }).cm?.composing) return;
+    const cursor = editor.getCursor('head');
+    const line = editor.getLine(cursor.line);
+    const match = taxonShorthand.exec(line);
+    if (!match || cursor.ch !== match[0].length) return;
+    if (this.protectedAt(editor, file, editor.posToOffset({ line: cursor.line, ch: 0 }))) return;
+    const gap = /^[ \t]*/.exec(line.slice(match[0].length))![0].length;
+    const text = `*${match[2]}.* `;
+    this.normalizing = true;
+    try {
+      editor.replaceRange(text, { line: cursor.line, ch: match[1].length }, { line: cursor.line, ch: match[0].length + gap });
+      editor.setCursor({ line: cursor.line, ch: match[1].length + text.length });
+    } finally { this.normalizing = false; }
+  }
+
+  /** Taxa in use across the vault, most used first, for the `.` suggestion. */
+  taxa(): { taxon: string; count: number }[] {
+    const counts = new Map<string, number>();
+    for (const document of this.host.index().documents.values()) {
+      if (!document.enabled) continue;
+      for (const tree of document.trees) if (tree.meta.taxon) counts.set(tree.meta.taxon, (counts.get(tree.meta.taxon) ?? 0) + 1);
+    }
+    return [...counts].map(([taxon, count]) => ({ taxon, count })).sort((a, b) => b.count - a.count || a.taxon.localeCompare(b.taxon));
   }
 
   /**
@@ -501,6 +543,39 @@ class HybridWikilinkSuggest extends EditorSuggest<LinkChoice> {
   }
 }
 
+interface TaxonChoice { taxon: string; count: number; fresh: boolean; }
+
+/** v0.6: `.` at the start of a heading suggests the taxa in use; choosing one writes `*Taxon.* `. */
+class HybridTaxonSuggest extends EditorSuggest<TaxonChoice> {
+  constructor(private support: InputSupport) { super(support.plugin.app); }
+  onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
+    if (!file || !samePosition(editor.getCursor('from'), cursor) || !samePosition(editor.getCursor('to'), cursor)) return null;
+    const match = taxonQuery.exec(editor.getLine(cursor.line).slice(0, cursor.ch));
+    if (!match) return null;
+    const start = { line: cursor.line, ch: match[1].length };
+    if (!this.support.capture(editor, file, start, cursor)) return null;
+    return { start, end: { ...cursor }, query: match[2] };
+  }
+  getSuggestions(context: EditorSuggestContext): TaxonChoice[] {
+    const query = context.query.toLowerCase();
+    const choices = this.support.taxa().filter(({ taxon }) => taxon.toLowerCase().startsWith(query)).slice(0, suggestionLimit)
+      .map(entry => ({ ...entry, fresh: false }));
+    if (context.query && !choices.some(choice => choice.taxon === context.query)) choices.push({ taxon: context.query, count: 0, fresh: true });
+    return choices;
+  }
+  renderSuggestion(choice: TaxonChoice, el: HTMLElement): void {
+    el.textContent = `${choice.taxon}.${choice.fresh ? '  (new taxon)' : `  · ${choice.count}`}`;
+  }
+  selectSuggestion(choice: TaxonChoice): void {
+    if (!this.context) return;
+    const { editor, start, end } = this.context;
+    this.close();
+    const text = `*${choice.taxon}.* `;
+    editor.replaceRange(text, start, end);
+    editor.setCursor({ line: start.line, ch: start.ch + text.length });
+  }
+}
+
 /**
  * Obsidian checks editor suggesters in order and its own `[[` file suggester comes first, so a
  * plugin suggester registered normally never sees `[[`. Move ours to the front of the private
@@ -523,6 +598,9 @@ export function registerHybridInput(plugin: Plugin, host: HybridInputHost): { pr
   plugin.registerEditorSuggest(links);
   preferSuggest(plugin, links as EditorSuggest<unknown>);
   plugin.register(() => links.close());
+  const taxa = new HybridTaxonSuggest(support);
+  plugin.registerEditorSuggest(taxa);
+  plugin.register(() => taxa.close());
   for (const [command, id, name] of [
     ['subtree', 'insert-subtree', 'Insert subtree'],
     ['transclude', 'insert-tree-embed', 'Insert tree embed'],

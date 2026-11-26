@@ -97,6 +97,9 @@ export function createHybridEditor(host:HybridEditorHost):Extension {
       ranges.push(Decoration.line({class:'hybrid-tree-heading'}).range(line.from));
       const label=tree===doc.root?tree.meta.taxon??'':labels.get(tree.from)??'';
       if(label)ranges.push(Decoration.widget({widget:tree===doc.root?new HeaderPart(tree,'taxon',label,host):new Label(label),block:tree===doc.root,side:-1}).range(line.from));
+      // v0.6: the label already shows the taxon, so its source `*Claim.* ` is hidden off the caret's line.
+      const italic=tree.meta.taxon&&!active?/^( {0,3}#{1,6}[ \t]+)(\*|_)[^\s*_.](?:[^*_.]*[^\s*_.])?\.\2(?:[ \t]+|$)/.exec(line.text):null;
+      if(italic)ranges.push(Decoration.replace({}).range(line.from+italic[1].length,line.from+italic[0].length));
       if(tree.id&&!active){
         const suffix=new RegExp('\\s+\\^'+tree.id+'\\s*$').exec(line.text);
         const widget=new HeaderPart(tree,'slug','',host);
