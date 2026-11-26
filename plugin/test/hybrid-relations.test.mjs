@@ -14,8 +14,11 @@ const options = { folders: ['/'], publicFolders: [], reservedIds: [] };
 const parse = (path, source) => core.parseHybrid(path, source, options);
 const graphOf = documents => {
   const index = core.indexHybrid(documents);
-  return relations.createTreeRelations(index, (target, fromPath) => core.resolveHybrid(index, target, fromPath));
+  const graph = relations.createTreeRelations(index, (target, fromPath) => core.resolveHybrid(index, target, fromPath));
+  return { ...linkGraph(graph), context: key => graph.forTree(key).context };
 };
+// These tests pin link facts; Context (who transcludes a tree) has its own test at the end.
+function linkGraph(graph) { return { forTree: key => { const { context, ...links } = graph.forTree(key); return links; } }; }
 const ids = trees => trees.map(tree => tree.id ?? tree.key);
 const empty = () => ({ backlinks: [], related: [], references: [] });
 
@@ -187,7 +190,7 @@ test('semantic parse errors refuse incoming normal links and embeds as well as s
     const index = core.indexHybrid([source, embedder, bad, good, reference]);
     assert.equal(core.resolveHybrid(index, 'Bad.md', source.path).status, 'resolved', 'scope/resolution alone is not semantic validity');
     Object.defineProperty(bad, 'source', { get() { throw new Error('must not scan a semantically invalid source'); } });
-    const graph = relations.createTreeRelations(index, (target, path) => core.resolveHybrid(index, target, path));
+    const graph = linkGraph(relations.createTreeRelations(index, (target, path) => core.resolveHybrid(index, target, path)));
     assert.deepEqual(graph.forTree(source.root.key), { backlinks: [], related: [good.root], references: [] }, code);
     assert.deepEqual(graph.forTree(bad.root.key), empty(), code);
     assert.deepEqual(graph.forTree(reference.root.key).backlinks, [good.root], code);
@@ -236,10 +239,10 @@ test('masked alias examples and delimiters remain inert without losing the outer
     assert.equal(source.diagnostics.some(diagnostic => diagnostic.severity === 'error'), false, alias);
     const index = core.indexHybrid([source, target, reference, hidden]);
     const resolutions = [];
-    const graph = relations.createTreeRelations(index, (target, path) => {
+    const graph = linkGraph(relations.createTreeRelations(index, (target, path) => {
       if (path === source.path) resolutions.push(target);
       return core.resolveHybrid(index, target, path);
-    });
+    }));
     assert.deepEqual(graph.forTree(source.root.key).related, [target.root], alias);
     assert.deepEqual(graph.forTree(source.root.key).references, [reference.root], alias);
     assert.deepEqual(graph.forTree(hidden.root.key).backlinks, [], alias);
@@ -266,11 +269,11 @@ test('protected targets and non-link examples cannot borrow permission from a vi
   const target = parse('Target.md', '# Target\n');
   const index = core.indexHybrid([source, target]);
   const resolutions = [];
-  const graph = relations.createTreeRelations(index, (text, path) => {
+  const graph = linkGraph(relations.createTreeRelations(index, (text, path) => {
     resolutions.push([text, path]);
     // Even a permissive adapter must not make a masked target a fact.
     return { status: 'resolved', tree: target.root, document: target };
-  });
+  }));
   assert.deepEqual(resolutions, [['Target.md', source.path]]);
   assert.deepEqual(graph.forTree(source.root.key).related, [target.root]);
   assert.deepEqual(graph.forTree(target.root.key).backlinks, [source.root]);
@@ -296,10 +299,10 @@ test('multiline or unclosed aliases never promote their payload to independent f
     assert.equal(source.diagnostics.some(diagnostic => diagnostic.severity === 'error'), false, body);
     const index = core.indexHybrid([source, target, hidden, after]);
     const resolutions = [];
-    const graph = relations.createTreeRelations(index, (text, path) => {
+    const graph = linkGraph(relations.createTreeRelations(index, (text, path) => {
       resolutions.push(text);
       return core.resolveHybrid(index, text, path);
-    });
+    }));
     assert.deepEqual(graph.forTree(source.root.key).related, [after.root], body);
     assert.deepEqual(graph.forTree(source.root.key).references, [], body);
     assert.deepEqual(graph.forTree(target.root.key).backlinks, [], body);
@@ -342,12 +345,12 @@ test('stale identity entries and same-key resolver snapshots stay fail closed wi
   index.ids.set('stale-id', [old.root]);
   assert.equal(core.resolveHybrid(index, 'stale-id', source.path).status, 'resolved', 'a stale ID map can return a same-path foreign tree');
   const calls = new Map();
-  const graph = relations.createTreeRelations(index, (target, path) => {
+  const graph = linkGraph(relations.createTreeRelations(index, (target, path) => {
     if (path === source.path) calls.set(target, (calls.get(target) ?? 0) + 1);
     if (target === 'ambiguous-id') return { status: 'ambiguous', message: 'not unique' };
     if (target === 'foreign-document') return { status: 'resolved', tree: current.root, document: old };
     return core.resolveHybrid(index, target, path);
-  });
+  }));
   assert.deepEqual(graph.forTree(source.root.key), { backlinks: [], related: [current.root], references: [reference.root] });
   assert.deepEqual(graph.forTree(current.root.key).backlinks, [source.root]);
   assert.deepEqual(graph.forTree(reference.root.key).backlinks, [current.root]);
@@ -378,10 +381,10 @@ test('wikilink lexing respects source escapes and treats labels as inert payload
   const embedded = parse('E.md', '---\nforester-id: escaped-embed\n---\n[[embedded-ref]]');
   const index = core.indexHybrid([a, ref, rogue, embedded, ...documents]);
   const targets = [];
-  const graph = relations.createTreeRelations(index, (target, fromPath) => {
+  const graph = linkGraph(relations.createTreeRelations(index, (target, fromPath) => {
     targets.push(target);
     return core.resolveHybrid(index, target, fromPath);
-  });
+  }));
   assert.deepEqual(ids(graph.forTree(a.root.key).related), ['visible-id', 'labelled-id', 'close-id', 'after-id']);
   assert.deepEqual(ids(graph.forTree(a.root.key).references), ['real-ref']);
   assert.deepEqual(graph.forTree(documents[0].root.key).backlinks, []);
@@ -402,11 +405,11 @@ test('ambiguous identities and disabled or foreign documents never create guesse
   assert.ok(index.diagnostics.some(diagnostic => diagnostic.code === 'duplicate-id'));
   assert.equal(ordinary.enabled, false);
   Object.defineProperty(ordinary, 'source', { get() { throw new Error('must not scan disabled Markdown'); } });
-  const graph = relations.createTreeRelations(index, (target, fromPath) => {
+  const graph = linkGraph(relations.createTreeRelations(index, (target, fromPath) => {
     // An adapter must not be able to import facts from a foreign graph snapshot.
     if (target === 'spoofed') return { status: 'resolved', tree: h.trees[1], document: foreign };
     return core.resolveHybrid(index, target, fromPath);
-  });
+  }));
   assert.deepEqual(graph.forTree(source.root.key).related, []);
   assert.deepEqual(graph.forTree(source.root.key).references, [a.root], 'explicit file identity is not a guessed duplicate-ID match');
   assert.deepEqual(graph.forTree(a.root.key).backlinks, [source.root]);
@@ -431,11 +434,11 @@ test('one snapshot scan and per-tree query caches bound repeated relation work',
     Object.defineProperty(document.root.meta, 'taxon', { get() { taxonReads++; return taxon; } });
   }
   const resolutions = new Map();
-  const graph = relations.createTreeRelations(index, (target, fromPath) => {
+  const graph = linkGraph(relations.createTreeRelations(index, (target, fromPath) => {
     const key = `${fromPath}\0${target}`;
     resolutions.set(key, (resolutions.get(key) ?? 0) + 1);
     return core.resolveHybrid(index, target, fromPath);
-  });
+  }));
   assert.equal(sourceReads, documents.length, 'read each enabled source once, never reparse through the factory');
   assert.equal(resolutions.size, 4);
   assert.ok([...resolutions.values()].every(count => count === 1), 'memoize resolved and missing targets per source path');
@@ -542,7 +545,7 @@ test('file/alias identity collisions remain ambiguous even when one document is 
   const index = core.indexHybrid([a, target, ordinary]);
   assert.equal(core.resolveHybrid(index, 'same', a.path).status, 'ambiguous');
   assert.equal(core.resolveHybrid(index, 'topic', a.path).status, 'ambiguous');
-  const graph = relations.createTreeRelations(index, (target, path) => core.resolveHybrid(index, target, path));
+  const graph = linkGraph(relations.createTreeRelations(index, (target, path) => core.resolveHybrid(index, target, path)));
   assert.deepEqual(graph.forTree(a.root.key), empty());
   assert.deepEqual(graph.forTree(target.root.key).backlinks, []);
   assert.deepEqual(graph.forTree(target.trees[1].key).backlinks, []);
@@ -563,8 +566,9 @@ test('metadata ranges independently guard relations without changing parser-owne
   assert.deepEqual(graph.forTree(a.root.key).references, []);
   assert.deepEqual(graph.forTree(ref.root.key).backlinks, []);
   assert.equal(JSON.stringify(a), before);
-  assert.deepEqual(Object.keys(graph), ['forTree']);
-  assert.deepEqual(Object.keys(graph.forTree(a.root.key)).sort(), ['backlinks', 'references', 'related']);
+  const index = core.indexHybrid([a, ref]), raw = relations.createTreeRelations(index, (target, fromPath) => core.resolveHybrid(index, target, fromPath));
+  assert.deepEqual(Object.keys(raw), ['forTree']);
+  assert.deepEqual(Object.keys(raw.forTree(a.root.key)).sort(), ['backlinks', 'context', 'references', 'related']);
 });
 
 test('Reference classification uses the parser taxon, not guessed bibliography/metadata', () => {
@@ -670,4 +674,13 @@ test('long escapes, nested labels and unmatched openers scan in a bounded child'
   assert.ok(metrics.sourceLength > 400000);
   assert.equal(metrics.protectedRanges, 10001);
   context.diagnostic(JSON.stringify({ lexerProbe: metrics }));
+});
+
+test('Context lists the trees that transclude a tree: its parent section and every embedding note', () => {
+  const a = parse('A.md', '---\nforester-id: a-id\n---\n# A\n\n## Part ^part-id\n\nBody');
+  const b = parse('B.md', '---\nforester-id: b-id\n---\n![[a-id]]\n\n[[part-id]]');
+  const graph = graphOf([a, b]);
+  assert.deepEqual(ids(graph.context(a.root.key)), ['b-id']);
+  assert.deepEqual(ids(graph.context(a.trees.find(tree => tree.id === 'part-id').key)), ['a-id'], 'a link is not context');
+  assert.deepEqual(graph.context(b.root.key), []);
 });

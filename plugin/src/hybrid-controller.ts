@@ -106,7 +106,7 @@ export class HybridController {
   private backmatterPrepareTimer?: ReturnType<typeof setTimeout>;
   private backmatterPreparing = false;
 
-  constructor(private plugin: Plugin, private options: () => HybridOptions, private linkSuggest: () => boolean = () => true, private siteUrl: () => string = () => '') {}
+  constructor(private plugin: Plugin, private options: () => HybridOptions, private linkSuggest: () => boolean = () => true, private siteUrl: () => string = () => '', private noteBackmatter: () => boolean = () => true) {}
 
   private configuration(): { options: HybridOptions; key: string } {
     const value = this.options();
@@ -905,7 +905,8 @@ export class HybridController {
   }
 
   private renderDocumentBackmatter(container: HTMLElement, document: HybridDocument, snapshot: EditorBackmatter): () => void {
-    if (this.stopped || !syntaxReady(document)) return () => {};
+    // Off by default in the plugin: the Forester sidebar holds context, references, backlinks and related instead.
+    if (this.stopped || !this.noteBackmatter() || !syntaxReady(document)) return () => {};
     const index = this.backmatterSnapshotIndexes.get(snapshot);
     if (!index || index.documents.get(document.path)?.source !== document.source) return () => {};
     const owner = this.plugin.addChild(new Component()); owner.load();

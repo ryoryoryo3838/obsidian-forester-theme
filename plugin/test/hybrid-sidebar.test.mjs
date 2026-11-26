@@ -98,7 +98,7 @@ test('native base constructor can query each sidebar identity before derived fie
 
 test('four individual public ItemViews open only by command and reuse existing leaves per type', async t => {
   const h = await setup(t);
-  assert.deepEqual([...h.plugin.views.keys()], specs.map(s => s[0]));
+  assert.deepEqual([...h.plugin.views.keys()], [...specs.map(s => s[0]), 'forester-tree']);
   assert.equal(h.workspace.leaves.length, 0, 'registration does not open tabs on startup');
   assert.equal(h.host.calls.current, 0, 'registration does not scan an unopened sidebar');
   assert.equal(h.host.calls.subscriptions, 0);
@@ -678,4 +678,19 @@ test('actual appended sidebar CSS keeps taxon/number neutral and navigation cont
       } finally { await page.close(); }
     }
   } finally { await browser.close(); }
+});
+
+test('one Forester view holds contents, context, references, backlinks and related, skipping empty sections', async t => {
+  const h = await setup(t), viewed = tree('viewed', 'Viewed');
+  h.host.state = current(viewed);
+  h.host.entries = [{ title: 'Part', number: '1', target: 'Note.md#^part', children: [], sourceKey: 'Note.md:part' }];
+  h.host.groups = { context: [tree('parent', 'Parent')], backlinks: [tree('back', 'Back')], related: [], references: [] };
+  const view = await open(h, 'forester-tree');
+  await settle();
+  assert.deepEqual([...view.contentEl.querySelectorAll('h3')].map(h3 => h3.textContent), ['Contents', 'Context', 'Backlinks']);
+  assert.deepEqual([...view.contentEl.querySelectorAll('.hybrid-sidebar-relations .hybrid-sidebar-heading')].map(b => b.textContent), ['Parent', 'Back']);
+  h.host.entries = []; h.host.groups = { context: [], backlinks: [], related: [], references: [] }; h.host.emit();
+  await settle();
+  assert.equal(view.contentEl.querySelectorAll('h3').length, 0);
+  assert.ok(view.contentEl.querySelector('.hybrid-sidebar-empty'));
 });

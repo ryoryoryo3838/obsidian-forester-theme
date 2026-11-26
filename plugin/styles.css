@@ -391,6 +391,8 @@ body.forester-hide-slugs a.slug {
    Keep native details disclosure/keyboard behaviour; scope everything to these views. */
 .hybrid-sidebar { overflow-y: auto; padding: var(--size-4-3, 12px); color: var(--text-normal); font-size: var(--font-ui-small, 13px); }
 .hybrid-sidebar h2 { margin: 0 0 .6em; font-size: var(--font-ui-medium, 14px); }
+.hybrid-sidebar .hybrid-sidebar-section { margin: 1.2em 0 .4em; font-size: var(--font-ui-small, 13px); font-weight: 700; }
+.hybrid-sidebar .hybrid-sidebar-section:first-of-type { margin-top: 0; }
 .hybrid-sidebar .hybrid-sidebar-context { margin: 0 0 .8em; color: var(--text-muted); overflow-wrap: anywhere; }
 .hybrid-sidebar .hybrid-sidebar-toc,
 .hybrid-sidebar .hybrid-sidebar-relations { list-style: none; margin: 0; padding: 0; }

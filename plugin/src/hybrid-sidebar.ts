@@ -16,7 +16,7 @@ export interface SidebarOutlineEntry {
 export interface HybridSidebarHost {
   current(): { document: HybridDocument; tree: HybridTree } | null;
   outline(document: HybridDocument, tree: HybridTree): SidebarOutlineEntry[];
-  relations(tree: HybridTree): { backlinks: HybridTree[]; related: HybridTree[]; references: HybridTree[] };
+  relations(tree: HybridTree): { context: HybridTree[]; backlinks: HybridTree[]; related: HybridTree[]; references: HybridTree[] };
   openTree(tree: HybridTree, newLeaf: boolean): Promise<void>;
   focusOccurrence(entry: SidebarOutlineEntry): Promise<void>;
   subscribe(update: () => void): () => void;
@@ -27,6 +27,8 @@ const VIEWS = [
   { type: 'forester-backlinks', title: 'Forester Backlinks', icon: 'link' },
   { type: 'forester-related', title: 'Forester Related', icon: 'network' },
   { type: 'forester-references', title: 'Forester References', icon: 'book-open' },
+  // Everything Forester puts around a tree, in one place: contents, then the site's backmatter order.
+  { type: 'forester-tree', title: 'Forester', icon: 'panel-right' },
 ] as const;
 type SidebarSpec = typeof VIEWS[number];
 type RelationKind = keyof ReturnType<HybridSidebarHost['relations']>;
@@ -95,10 +97,10 @@ class SidebarUpdates {
       const enabled = current?.document.enabled;
       const snapshot: SidebarSnapshot = {
         current,
-        outline: enabled && [...this.views].some(view => view.getViewType() === 'forester-toc')
+        outline: enabled && [...this.views].some(view => view.getViewType() === 'forester-toc' || view.getViewType() === 'forester-tree')
           ? this.host.outline(current.document, current.tree) : [],
         relations: enabled && [...this.views].some(view => view.getViewType() !== 'forester-toc')
-          ? this.host.relations(current.tree) : { backlinks: [], related: [], references: [] },
+          ? this.host.relations(current.tree) : { context: [], backlinks: [], related: [], references: [] },
       };
       for (const view of this.views) view.render(snapshot);
     } catch (error) {
@@ -155,18 +157,30 @@ class HybridSidebarView extends ItemView {
     if (!current) { this.empty('No active Markdown tree. Open a Markdown note to view Forester information.'); return; }
     if (!current.document.enabled) { this.empty('This Markdown note is excluded or Forester is disabled.'); return; }
     el.createEl('p', { cls: 'hybrid-sidebar-context', text: [current.tree.meta.title, current.tree.id].filter(Boolean).join(' · ') });
+    if (this.spec.type === 'forester-tree') { this.renderAll(snapshot); return; }
     if (this.spec.type === 'forester-toc' && snapshot.outline.length) { this.renderOutline(snapshot.outline); return; }
     if (this.spec.type !== 'forester-toc') {
       const kind = this.spec.type.slice('forester-'.length) as RelationKind;
       if (snapshot.relations[kind].length) { this.renderRelations(kind, snapshot.relations[kind]); return; }
     }
     const messages = {
+      'forester-tree': '',
       'forester-toc': 'No sections in the table of contents (entries may be excluded).',
       'forester-backlinks': 'No backlinks for this tree.',
       'forester-related': 'No related trees for this tree.',
       'forester-references': 'No references for this tree.',
     };
     this.empty(messages[this.spec.type]);
+  }
+  private renderAll(snapshot: SidebarSnapshot): void {
+    const before = this.contentEl.childElementCount;
+    const section = (title: string, kind: string): void => { this.contentEl.createEl('h3', { cls: 'hybrid-sidebar-section', text: title, attr: { 'data-section': kind } }); };
+    if (snapshot.outline.length) { section('Contents', 'contents'); this.renderOutline(snapshot.outline); }
+    for (const [kind, title] of [['context', 'Context'], ['references', 'References'], ['backlinks', 'Backlinks'], ['related', 'Related']] as const) {
+      if (!snapshot.relations[kind].length) continue;
+      section(title, kind); this.renderRelations(kind, snapshot.relations[kind]);
+    }
+    if (this.contentEl.childElementCount === before) this.empty('No contents, context, references, backlinks or related trees for this tree.');
   }
   private renderOutline(entries: SidebarOutlineEntry[]): void {
     const counts = new Map<string, number>();

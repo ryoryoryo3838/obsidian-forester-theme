@@ -1,6 +1,8 @@
 import type { HybridDocument, HybridIndex, HybridResolution, HybridTree, SourceRange } from './hybrid-types';
 
 export interface HybridTreeRelations {
+  /** Trees that transclude this one (its parent section or an embedding note): Forester's Context. */
+  context: HybridTree[];
   backlinks: HybridTree[];
   related: HybridTree[];
   references: HybridTree[];
@@ -201,11 +203,12 @@ function* prepareTreeRelations(
   const queries = new Map<string, HybridTreeRelations>();
   return {
     forTree(key) {
-      if (!trees.has(key)) return { backlinks: [], related: [], references: [] };
+      if (!trees.has(key)) return { context: [], backlinks: [], related: [], references: [] };
       let result = queries.get(key);
       if (!result) {
         const outgoing = [...(links.get(key) ?? [])];
         result = {
+          context: list([...transcludes].filter(([, targets]) => targets.has(key)).map(([source]) => source)),
           backlinks: list(inverse.get(key)),
           related: list(outgoing.filter(target => !isReference(target))),
           references: references(key),
@@ -214,6 +217,7 @@ function* prepareTreeRelations(
       }
       // Retain the original tree objects, but never expose our cached arrays.
       return {
+        context: result.context.slice(),
         backlinks: result.backlinks.slice(),
         related: result.related.slice(),
         references: result.references.slice(),
