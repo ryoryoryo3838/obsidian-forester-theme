@@ -1,6 +1,6 @@
 {
   "name": "obsidian-forester",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Forester tree visuals for Obsidian",
   "private": true,
   "type": "module",
