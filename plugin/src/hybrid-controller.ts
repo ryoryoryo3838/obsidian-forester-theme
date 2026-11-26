@@ -2,6 +2,7 @@ import { Component, editorInfoField, editorLivePreviewField, MarkdownRenderChild
 import { ViewPlugin, type EditorView } from '@codemirror/view';
 import { ChangeSet, type EditorState } from '@codemirror/state';
 import { drawHybridId, hybridModeEnabled, indexHybrid, parseHybrid, planHybridSave, resolveHybrid } from './hybrid-core';
+import { liftTarget, planLift } from './hybrid-lift';
 import { createHybridEditor, hybridRefresh, type EditorBackmatter } from './hybrid-editor';
 import { renderBackmatter } from './hybrid-backmatter';
 import { commitHybridPlan } from './hybrid-save';
@@ -295,6 +296,8 @@ export class HybridController {
     const input = registerHybridInput(this.plugin, { index: () => this.currentIndex(), searchIndex: () => this.index, subscribeSearch: update => { this.searchListeners.add(update); return () => this.searchListeners.delete(update); }, resolve: (target, path, index) => resolveHybrid(index ?? this.currentIndex(), target, path), insertTarget: (editor, file, tree, embed, replacement) => this.insertTarget(editor, file, tree, embed, replacement), linkSuggest: () => this.linkSuggest() });
     registerHybridSidebar(this.plugin, { current: () => this.current(), outline: (document, tree) => this.outline(document, tree), relations: tree => this.relations(tree), openTree: (tree, newLeaf) => this.openTree(tree, newLeaf), focusOccurrence: entry => this.focusOccurrence(entry), subscribe: update => this.subscribe(update) });
     this.plugin.addCommand({ id: 'check-hybrid-trees', name: 'Check hybrid trees', callback: () => this.checkTrees() });
+    this.plugin.addCommand({ id: 'lift-section-to-note', name: 'Return to parent: move this section into its own note',
+      editorCallback: (editor, context) => { if (context.file) void this.liftSection(editor, context.file).catch(error => new Notice(`Hybrid: ${String(error)}`, 10000)); } });
     this.plugin.addCommand({ id: 'preview-public-projection', name: 'Preview public projection (local only)', callback: () => this.previewPublic() });
     await this.refresh();
     await input.prepareSearch();
@@ -1074,6 +1077,40 @@ export class HybridController {
       this.listenerTimer = undefined;
       if (!this.stopped) for (const update of this.listeners) update();
     }, 0);
+  }
+
+  /**
+   * v0.6 "return to parent": move the caret's subsection into its own note,
+   * embed that note in its place and put the caret on the parent's next line.
+   * Links that reached the moved trees through this file follow them.
+   */
+  async liftSection(editor: Editor, file: TFile): Promise<void> {
+    const path = file.path, source = editor.getValue();
+    if (!this.isEnabled(path, source)) return;
+    const document = this.parse(path, source);
+    if (document.diagnostics.some(d => d.severity === 'error')) { new Notice('Hybrid: fix the errors in this note before moving a section'); return; }
+    const tree = liftTarget(document, editor.posToOffset(editor.getCursor('head')));
+    if (!tree) { new Notice('Hybrid: place the caret inside a subsection (## or deeper)'); return; }
+    const index = this.overlay(document);
+    // A name no other note's file name or tree ID can answer to, so ![[name]] resolves only here.
+    const folder = path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : '';
+    const base = tree.meta.title.replace(/[\\/:*?"<>|#^[\]%]/g, ' ').replace(/\s+/g, ' ').trim() || tree.id || 'Section';
+    const taken = (name: string): boolean => index.ids.has(name.toLowerCase()) ||
+      this.plugin.app.vault.getMarkdownFiles().some(other => other.basename.toLowerCase() === name.toLowerCase());
+    let name = base;
+    for (let n = 2; taken(name); n++) name = `${base} ${n}`;
+    const plan = planLift(index, document, tree, name);
+    if (editor.getValue() !== source) { new Notice('Hybrid: the note changed; try again'); return; }
+    await this.plugin.app.vault.create(`${folder}${name}.md`, plan.noteSource);
+    for (const edit of [...plan.sourceEdits].reverse()) editor.replaceRange(edit.text, editor.offsetToPos(edit.from), editor.offsetToPos(edit.to));
+    editor.setCursor(editor.offsetToPos(plan.caret));
+    const skipped: string[] = [];
+    for (const edit of plan.otherEdits) {
+      const target = this.plugin.app.vault.getAbstractFileByPath(edit.path);
+      if (!(target instanceof TFile)) { skipped.push(edit.path); continue; }
+      await this.plugin.app.vault.process(target, text => { if (text !== edit.before) { skipped.push(edit.path); return text; } return edit.after; });
+    }
+    new Notice(`Hybrid: moved "${tree.meta.title}" to ${folder}${name}.md` + (skipped.length ? `; update links by hand in ${skipped.join(', ')}` : ''), 8000);
   }
 
   private overlay(document: HybridDocument): HybridIndex {
