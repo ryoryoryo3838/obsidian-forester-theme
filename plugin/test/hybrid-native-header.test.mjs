@@ -61,3 +61,17 @@ test('transclusions use the same native header and ht hides the complete header,
  const hidden=widgets[1].toDOM({dispatch(){},focus(){}});await drain();assert.equal(hidden.querySelector('header'),null);
  for(const widget of widgets)widget.destroy();h.plugin.unload();
 });
+
+test('frontmatter meta keys join the Forester meta line in metadata.xsl order; author: false hides the byline',async()=>{
+ const person=optin('# Me\n','forester-id: me\ndates: 2026-08-02\nauthors: [Alice]\ninstitution: "Univ"\norcid: "0009-0000-4771-5212"\nexternal: "https://miya-lis.net"\n');
+ const quiet=optin('# Quiet\n','forester-id: quiet\nauthors: [Alice]\nauthor: false\nvenue: "Conf"\n');
+ const h=createHarness({'Me.md':person,'Quiet.md':quiet});const c=new HybridController(h.plugin,h.getter);await c.initialize();
+ const meta=path=>{const state=h.open(path).editor.attach(h.plugin.extensions),dom=document.createElement('div');
+  for(const ds of state.facet(EditorView.decorations))if(typeof ds.between==='function')ds.between(0,state.doc.length,(_f,_t,d)=>{if(d.spec.widget)dom.append(d.spec.widget.toDOM({dispatch(){},focus(){}}));});
+  return [...dom.querySelectorAll('.hybrid-metadata li')];};
+ const items=meta('Me.md');
+ assert.deepEqual(items.map(li=>li.textContent),['August 2, 2026','Alice','Univ','0009-0000-4771-5212','https://miya-lis.net']);
+ assert.equal(items[3].querySelector('a').href,'https://orcid.org/0009-0000-4771-5212');
+ assert.deepEqual(meta('Quiet.md').map(li=>li.textContent),['Conf']);
+ h.plugin.unload();
+});

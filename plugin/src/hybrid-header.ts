@@ -38,11 +38,29 @@ export function appendTaxon(heading:HTMLElement,tree:HybridTree,label:string):vo
   const span=heading.ownerDocument.createElement('span');span.className='hybrid-taxon-number'+(tree.level===1?' hybrid-root-taxon':'');
   span.setAttribute('data-hybrid-badge',tree.key);span.textContent=label+(tree.level===1?'':' ');heading.prepend(span);
 }
+/** Frontmatter keys shown on the meta line, in the order Forester's metadata.xsl emits them. */
+const META_LINE=['position','institution','venue','source','doi','orcid','external','slides','video'] as const;
+const META_HREF:Partial<Record<typeof META_LINE[number],(value:string)=>[string,string]>>={
+  doi:v=>['https://www.doi.org/'+v,v],orcid:v=>['https://orcid.org/'+v,v],external:v=>[v,v],slides:v=>[v,'Slides'],video:v=>[v,'Video'],
+};
+export function hasMetadata(tree:HybridTree):boolean {
+  return tree.meta.dates.length>0||tree.meta.authors.length>0||!!tree.meta.contributors?.length||META_LINE.some(key=>tree.meta.properties?.[key]?.length);
+}
 export function renderMetadata(dom:Document,tree:HybridTree,host:HeaderHost):HTMLElement|null {
   const el=dom.createElement('div');el.className='hybrid-metadata';const list=dom.createElement('ul');el.append(list);
-  for(const date of tree.meta.dates){const li=dom.createElement('li');li.className='meta-item';relationText(li,date,tree.path,host,true);list.append(li);}
-  if(tree.meta.authors.length){const li=dom.createElement('li');li.className='meta-item';const address=dom.createElement('address');address.className='author';
-    tree.meta.authors.forEach((value,i)=>{if(i)address.append(dom.createTextNode(', '));relationText(address,value,tree.path,host);});li.append(address);list.append(li);}
+  const item=()=>{const li=dom.createElement('li');li.className='meta-item';list.append(li);return li;};
+  for(const date of tree.meta.dates)relationText(item(),date,tree.path,host,true);
+  // Native `author: false` hides the byline, as on the site.
+  const contributors=tree.meta.contributors??[];
+  if(tree.meta.properties?.author?.[0]!=='false'&&(tree.meta.authors.length||contributors.length)){const address=dom.createElement('address');address.className='author';
+    tree.meta.authors.forEach((value,i)=>{if(i)address.append(dom.createTextNode(', '));relationText(address,value,tree.path,host);});
+    if(contributors.length){address.append(dom.createTextNode(' with contributions from '));contributors.forEach((value,i)=>{if(i)address.append(dom.createTextNode(', '));relationText(address,value,tree.path,host);});}
+    item().append(address);}
+  for(const key of META_LINE)for(const value of tree.meta.properties?.[key]??[]){
+    const href=META_HREF[key]?.(value);
+    if(!href){relationText(item(),value,tree.path,host);continue;}
+    const a=dom.createElement('a');a.className='external-link';a.href=href[0];a.textContent=href[1];a.target='_blank';a.rel='noopener';item().append(a);
+  }
   return list.childElementCount?el:null;
 }
 export function renderTreeHeader(dom:Document,tree:HybridTree,label:string,host:HeaderHost,showMetadata=true):HTMLElement {

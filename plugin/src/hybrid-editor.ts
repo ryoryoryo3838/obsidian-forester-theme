@@ -2,7 +2,7 @@ import { EditorState, Prec, StateEffect, StateField, type Extension, type Range 
 import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet } from '@codemirror/view';
 import type { HybridDocument, HybridResolution, HybridTree } from './hybrid-types';
 import { planDisplay, parseEmbedLine, rootHeadingAt, foresterTokens, type DisplaySpan, type EmbedFlags } from './hybrid-display';
-import { appendTaxon, appendSlug, renderMetadata, renderTreeHeader } from './hybrid-header';
+import { appendTaxon, appendSlug, hasMetadata, renderMetadata, renderTreeHeader } from './hybrid-header';
 import type { BackmatterGroups } from './hybrid-backmatter';
 export const hybridRefresh = StateEffect.define<null>();
 export interface EditorBackmatter {
@@ -105,7 +105,7 @@ export function createHybridEditor(host:HybridEditorHost):Extension {
         const widget=new HeaderPart(tree,'slug','',host);
         ranges.push(suffix?Decoration.replace({widget}).range(line.from+suffix.index,line.to):Decoration.widget({widget,side:1}).range(line.to));
       }
-      if(tree.meta.authors.length||tree.meta.dates.length)ranges.push(Decoration.widget({widget:new HeaderPart(tree,'metadata','',host),block:true,side:1}).range(line.to));
+      if(hasMetadata(tree))ranges.push(Decoration.widget({widget:new HeaderPart(tree,'metadata','',host),block:true,side:1}).range(line.to));
     }
     for(const span of plan.spans){
       if(span.to>state.doc.length||span.to<=span.from)continue;

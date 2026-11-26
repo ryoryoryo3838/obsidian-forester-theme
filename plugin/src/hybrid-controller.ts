@@ -296,6 +296,8 @@ export class HybridController {
     const input = registerHybridInput(this.plugin, { index: () => this.currentIndex(), searchIndex: () => this.index, subscribeSearch: update => { this.searchListeners.add(update); return () => this.searchListeners.delete(update); }, resolve: (target, path, index) => resolveHybrid(index ?? this.currentIndex(), target, path), insertTarget: (editor, file, tree, embed, replacement) => this.insertTarget(editor, file, tree, embed, replacement), linkSuggest: () => this.linkSuggest(), siteUrl: () => this.siteUrl() });
     registerHybridSidebar(this.plugin, { current: () => this.current(), outline: (document, tree) => this.outline(document, tree), relations: tree => this.relations(tree), openTree: (tree, newLeaf) => this.openTree(tree, newLeaf), focusOccurrence: entry => this.focusOccurrence(entry), subscribe: update => this.subscribe(update) });
     this.plugin.addCommand({ id: 'check-hybrid-trees', name: 'Check hybrid trees', callback: () => this.checkTrees() });
+    // Hybrid notes show frontmatter as the Forester meta line; this brings the Properties table back to edit it.
+    this.plugin.addCommand({ id: 'toggle-properties', name: 'Show or hide Properties in hybrid notes', callback: () => document.body.classList.toggle('hybrid-show-properties') });
     this.plugin.addCommand({ id: 'lift-section-to-note', name: 'Return to parent: move this section into its own note',
       editorCallback: (editor, context) => { if (context.file) void this.liftSection(editor, context.file).catch(error => new Notice(`Hybrid: ${String(error)}`, 10000)); } });
     this.plugin.addCommand({ id: 'preview-public-projection', name: 'Preview public projection (local only)', callback: () => this.previewPublic() });

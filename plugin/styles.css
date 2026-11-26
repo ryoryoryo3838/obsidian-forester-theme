@@ -35,6 +35,9 @@ body.forester-enabled.theme-dark {
 .hybrid-metadata li { display: inline; }
 .hybrid-metadata li + li::before { content: " · "; }
 .hybrid-metadata address { display: inline; font-style: normal; }
+/* Hybrid notes show frontmatter as the meta line under the title, not as the Properties table;
+   the "Show or hide Properties" command brings the table back for editing. */
+body:not(.hybrid-show-properties) :is(.markdown-source-view:has(.cm-line.hybrid-tree-heading), .markdown-preview-view:has(.hybrid-slug, .hybrid-metadata, .hybrid-root-taxon)) .metadata-container { display: none; }
 /* Only owned headings and metadata change font: prose and native UI stay intact.
    CM tokens have their own native font rules, so style the token as well as its line. */
 .hybrid-metadata,
