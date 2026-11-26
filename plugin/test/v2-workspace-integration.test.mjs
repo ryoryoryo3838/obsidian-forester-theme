@@ -144,7 +144,8 @@ test('input replacement is committed through guarded disk/editor snapshots with 
   const after = h.vault.data.get('Page.md');
   assert.equal(view.editor.getValue(), after); assert.ok(!after.includes('/transclude'));
   assert.match(after, /## Own \^[A-F0-9]{6}/);
-  assert.ok(after.includes('[[book-id|A &#124; B &#93; &#96; &#36; &#37; &#123; &lt; C]]'));
+  // v0.6: the native whole-note form, with no display text (a hostile title never reaches the source).
+  assert.ok(after.includes('[[Book]]') && !after.includes('A |'));
   assert.ok(view.editor.replacements.every(r => r.end - r.start < source.length), 'minimal undoable source patch');
   assert.equal(h.vault.data.get('Book.md'), book, 'identified targets need no write');
   h.plugin.unload();
@@ -159,7 +160,7 @@ test('input can mint an unaddressed target root and self-subtree without committ
     const targetAfter = c.currentIndex().documents.get(self ? 'Page.md' : 'Book.md');
     const id = self ? targetAfter.trees[1].id : targetAfter.root.id;
     assert.match(id ?? '', /^[0-9A-F]{6}$/); assert.ok(!/^\d{6}$/.test(id));
-    assert.ok(h.vault.data.get('Page.md').includes(`![[${id}]]`));
+    assert.ok(h.vault.data.get('Page.md').includes(self ? `![[Page#^${id}]]` : '![[Book]]'));
     assert.equal(view.editor.getValue(), h.vault.data.get('Page.md'));
     assert.ok(!h.vault.data.get('Page.md').includes('/transclude'));
     if (!self) assert.equal(h.vault.processes[0], 'Book.md', 'target identity exists before source reference');
@@ -235,7 +236,7 @@ test('the real slash picker mints a root and replaces its captured input only af
   assert.ok(picker); const target = picker.getSuggestions('Book')[0]; assert.ok(target);
   picker.selectSuggestion(target, new window.Event('click')); await c.saveTail;
   const id = c.currentIndex().documents.get('Book.md').root.id;
-  assert.match(id, /^[0-9A-F]{6}$/); assert.ok(h.vault.data.get('Page.md').includes(`[[${id}|Book]]`));
+  assert.match(id, /^[0-9A-F]{6}$/); assert.ok(h.vault.data.get('Page.md').includes('[[Book]]'));
   assert.equal(view.editor.getValue(), h.vault.data.get('Page.md')); assert.equal(h.vault.processes[0], 'Book.md');
   h.plugin.unload();
 });
@@ -321,7 +322,7 @@ test('self-root selection at the beginning of a note retains newly minted frontm
     await c.insertTarget(view.editor, view.file, tree, false, { from: { line: 0, ch: 0 }, to: { line: 0, ch: source.length }, before: source });
     const current = c.currentIndex().documents.get('Page.md');
     assert.match(current.root.id ?? '', /^[A-F0-9]{6}$/, 'root identity is retained, not replaced together with the old slash range');
-    assert.ok(current.source.startsWith('---\nforester-id: ')); assert.ok(current.source.includes(`[[${current.root.id}|Page]]`));
+    assert.ok(current.source.startsWith('---\nforester-id: ')); assert.ok(current.source.includes('[[Page]]'));
     assert.equal(view.editor.getValue(), h.vault.data.get('Page.md')); h.plugin.unload();
   }
 });

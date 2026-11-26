@@ -173,8 +173,9 @@ test('an inline [[ choice confirmed before autosave saves the typed text first a
   const at = typed.indexOf('[[');
   await s.c.insertTarget(author.editor, author.file, tree, false, { from: { line: 2, ch: at - saved.lastIndexOf('\n') - 1 }, to: { line: 2, ch: typed.length - typed.lastIndexOf('\n') - 1 }, before: typed });
   assert.ok(!notices.some(message => /保存を中止/.test(message)), notices.join('\n'));
-  assert.equal(s.h.vault.data.get('Page.md'), saved + '[[ABC123|Part]]');
-  assert.equal(author.editor.getValue(), saved + '[[ABC123|Part]]');
+  // v0.6: the native subtree form, with no display text (the title is shown on render).
+  assert.equal(s.h.vault.data.get('Page.md'), saved + '[[Book#^ABC123]]');
+  assert.equal(author.editor.getValue(), saved + '[[Book#^ABC123]]');
   assert.ok(s.h.vault.saves >= 1, 'the owning view was saved before the commit');
   s.close();
 });

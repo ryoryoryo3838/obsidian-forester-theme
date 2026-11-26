@@ -4,7 +4,6 @@ import { parseDocument as browserParseDocument } from '../node_modules/yaml/brow
 import type { parseDocument as YamlParseDocument } from 'yaml';
 const parseDocument = browserParseDocument as typeof YamlParseDocument;
 import type { HybridDiagnostic, HybridDocument, HybridIndex, HybridOptions, HybridRaw, HybridResolution, HybridSavePlan, HybridTree, SourceRange } from './hybrid-types';
-import { encodeWikilinkLabel } from './hybrid-literal-label';
 
 // Preserve option-only reservations without extending the shared document contract.
 const reservations = new WeakMap<HybridDocument, readonly string[]>();
@@ -854,7 +853,10 @@ export function planHybridSave(index: HybridIndex, fromPath: string, draw?: () =
     change(doc, { from, to: from, text: ` ^${id}` });
     return id;
   };
-  const references: { target: string; hash: number; from: number; labelAt?: number; tree: HybridTree; document: HybridDocument }[] = [];
+  // v0.6 writes no display text: Forester and the editor show the target's own
+  // title. A heading-named link is still pinned to the heading's ID, so a
+  // renamed heading cannot break it.
+  const references: { target: string; hash: number; from: number; tree: HybridTree; document: HybridDocument }[] = [];
   const links = /!?\[\[([^\]\r\n]+)\]\]/g;
   let match: RegExpExecArray | null;
   while ((match = links.exec(document.source))) {
@@ -862,16 +864,15 @@ export function planHybridSave(index: HybridIndex, fromPath: string, draw?: () =
     const target = match[1].split('|')[0];
     const hash = target.indexOf('#');
     const fixesHeading = hash >= 0 && target[hash + 1] !== '^';
-    const needsLabel = !match[0].startsWith('!') && !match[1].includes('|');
-    if (!fixesHeading && !needsLabel) continue;
+    if (!fixesHeading) continue;
     const resolved = resolveHybrid(index, target, fromPath);
     if (resolved.status !== 'resolved') {
-      if (fixesHeading || resolved.status === 'ambiguous') diagnostics.push({ code: resolved.status === 'ambiguous' ? 'ambiguous-reference' : 'missing-reference', message: resolved.message, path: fromPath, line: linesOf(document).find(line => line.from <= match!.index && match!.index < line.end)?.line, severity: 'warning' });
+      diagnostics.push({ code: resolved.status === 'ambiguous' ? 'ambiguous-reference' : 'missing-reference', message: resolved.message, path: fromPath, line: linesOf(document).find(line => line.from <= match!.index && match!.index < line.end)?.line, severity: 'warning' });
       continue;
     }
     if (!resolved.document.enabled) continue;
     const from = match.index + (match[0].startsWith('!') ? 3 : 2);
-    references.push({ target, hash: fixesHeading ? hash : -1, from, labelAt: needsLabel ? from + target.length : undefined, tree: resolved.tree, document: resolved.document });
+    references.push({ target, hash, from, tree: resolved.tree, document: resolved.document });
   }
   const touched = new Set(references.map(reference => reference.document.path));
   for (const diagnostic of index.diagnostics) if (touched.has(diagnostic.path) && diagnostic.path !== fromPath && diagnostic.severity === 'error') diagnostics.push(diagnostic);
@@ -885,15 +886,8 @@ export function planHybridSave(index: HybridIndex, fromPath: string, draw?: () =
       if (tree !== document.root && tree.meta.publish && !parent?.meta.publish) ensureTree(tree, document);
     }
     for (const reference of references) {
-      if (reference.hash >= 0) {
-        const id = ensureTree(reference.tree, reference.document);
-        change(document, { from: reference.from, to: reference.from + reference.target.length, text: `${reference.target.slice(0, reference.hash)}#^${id}` });
-      }
-      if (reference.labelAt !== undefined && reference.tree.meta.title.trim()) {
-        // Generated titles are literal text, not new code/math/comments/raw regions.
-        const label = encodeWikilinkLabel(reference.tree.meta.title.trim().replace(/[\r\n]+/g, ' '));
-        change(document, { from: reference.labelAt, to: reference.labelAt, text: `|${label}` });
-      }
+      const id = ensureTree(reference.tree, reference.document);
+      change(document, { from: reference.from, to: reference.from + reference.target.length, text: `${reference.target.slice(0, reference.hash)}#^${id}` });
     }
     // Only the settled source receives automatic IDs. Referenced targets above
     // retain their existing targeted mint behavior, never a vault-wide rewrite.

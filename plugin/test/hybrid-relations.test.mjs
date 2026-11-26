@@ -469,7 +469,7 @@ test('deduplicated results have deterministic literal-path and numeric-source or
 
 // Focused synthetic regressions for the lexer/closure established by the TDD
 // slices above. These must also hold when parser/save implementations evolve.
-test('saved semantic-title aliases cannot generate extra graph edges', () => {
+test('v0.6: hostile target titles never reach the source or add graph edges', () => {
   for (const title of [
     '[[canary-id]] and ![[canary-id]]',
     '`code` $$ %% \\{ raw } and \\(math\\)',
@@ -482,9 +482,10 @@ test('saved semantic-title aliases cannot generate extra graph edges', () => {
     const index = core.indexHybrid([a, target, canary]);
     const saved = core.planHybridSave(index, a.path, () => { throw new Error('fixture identities are already assigned'); });
     assert.equal(saved.diagnostics.some(diagnostic => diagnostic.severity === 'error'), false);
-    assert.equal(saved.edits.length, 1);
-    const reparsed = parse(a.path, saved.edits[0].after);
-    assert.equal(reparsed.trees.length, 1, 'title alias may not create headings');
+    // v0.6 writes no display text, so a hostile title never reaches the source.
+    assert.equal(saved.edits.length, 0);
+    const reparsed = a;
+    assert.equal(reparsed.trees.length, 1, 'a title may not create headings');
     assert.equal(reparsed.diagnostics.some(diagnostic => diagnostic.severity === 'error'), false);
     const graph = graphOf([reparsed, target, canary]);
     assert.deepEqual(graph.forTree(reparsed.root.key).related, [target.root]);

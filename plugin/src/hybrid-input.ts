@@ -56,6 +56,7 @@ class InputSupport {
   private bindingVersion = 0;
   private binding: { editor: Editor; file: TFile; path: string } | null = null;
   private alive = true;
+  private normalizing = false;
   private catalog = new Map<string, { document: HybridDocument; facts: SearchTree[] }>();
   private nativeCatalog = new Map<string, SearchFile>();
   private nativePreparation: Promise<void>;
@@ -68,9 +69,10 @@ class InputSupport {
   constructor(readonly plugin: Plugin, readonly host: HybridInputHost) {
     const workspace = plugin.app.workspace;
     this.syncBinding();
-    plugin.registerEvent(workspace.on('editor-change', editor => {
+    plugin.registerEvent(workspace.on('editor-change', (editor, info) => {
       this.editorVersions.set(editor, (this.editorVersions.get(editor) ?? 0) + 1);
       this.syncBinding();
+      if (info?.file && this.host.linkSuggest?.() !== false) this.normalizeIdLinks(editor, info.file);
     }));
     plugin.registerEvent(workspace.on('active-leaf-change', () => this.syncBinding()));
     plugin.registerEvent(workspace.on('file-open', () => this.syncBinding()));
@@ -104,6 +106,64 @@ class InputSupport {
       this.searchTimer = setTimeout(() => { this.searchTimer = undefined; void this.prepareSearch(); }, 0);
     }));
     void this.prepareSearch();
+  }
+
+  /**
+   * v0.6: a link typed by tree ID (`[[claim-001]]`, `![[claim-001|-h]]`) is
+   * rewritten to the native form Obsidian resolves itself (`[[note#^claim-001]]`,
+   * or `[[note]]` for a whole note) once it is closed and the caret has left it.
+   * Only the caret's line is read. A link whose ID also names a file or an alias
+   * is ambiguous and stays as written, as does anything in code or comments.
+   */
+  normalizeIdLinks(editor: Editor, file: TFile): void {
+    // Our own replacement fires editor-change synchronously; never re-enter.
+    if (this.normalizing || (editor as unknown as { cm?: { composing?: boolean } }).cm?.composing) return;
+    const cursor = editor.getCursor('head');
+    const line = editor.getLine(cursor.line);
+    if (!line.includes('[[')) return;
+    const index = this.host.index();
+    const document = index.documents.get(file.path);
+    if (!document?.enabled) return;
+    const draft = parseHybrid(file.path, editor.getValue(), { folders: ['/'], publicFolders: [], reservedIds: [] });
+    if (draft.diagnostics.some(diagnostic => diagnostic.severity === 'error')) return;
+    const lineStart = editor.posToOffset({ line: cursor.line, ch: 0 });
+    const masked = [...draft.protectedRanges, ...draft.trees.flatMap(tree => tree.metadataRanges)];
+    const links = /(!?)\[\[([^[\]|#^\r\n]+)((?:\|[^[\]\r\n]*)?)\]\]/g;
+    const edits: { from: number; to: number; text: string }[] = [];
+    for (let match; (match = links.exec(line));) {
+      const from = match.index, to = links.lastIndex;
+      if (cursor.ch >= from && cursor.ch <= to) continue; // still being typed
+      if (masked.some(range => range.from < lineStart + to && lineStart + from < range.to)) continue;
+      const id = match[2].trim();
+      if (!/^[A-Za-z0-9-]+$/.test(id)) continue;
+      const trees = index.ids.get(id.toLowerCase()) ?? [];
+      const resolved = this.host.resolve(id, file.path, index);
+      if (trees.length !== 1 || resolved.status !== 'resolved' || resolved.tree !== trees[0]) continue;
+      const tree = trees[0], owner = index.documents.get(tree.path);
+      const target = this.plugin.app.vault.getAbstractFileByPath(tree.path);
+      if (!owner || !target || !('extension' in target)) continue;
+      const anchor = tree === owner.root ? '' : `#^${tree.id}`;
+      const here = (text: string): boolean => {
+        const found = this.host.resolve(text + anchor, file.path, index);
+        return found.status === 'resolved' && found.tree === tree;
+      };
+      const short = this.plugin.app.metadataCache.fileToLinktext(target as TFile, file.path);
+      const linktext = here(short) ? short : here(tree.path) ? tree.path : undefined;
+      if (linktext === undefined) continue;
+      const text = `${match[1]}[[${linktext}${anchor}${match[3]}]]`;
+      // Our own rewrite fires editor-change too; an unchanged link must not loop.
+      if (text !== match[0]) edits.push({ from, to, text });
+    }
+    if (!edits.length) return;
+    // One replacement of the whole line: positions of later links never go stale.
+    let rewritten = line, shift = 0;
+    for (const edit of [...edits].reverse()) rewritten = rewritten.slice(0, edit.from) + edit.text + rewritten.slice(edit.to);
+    for (const edit of edits) if (edit.to <= cursor.ch) shift += edit.text.length - (edit.to - edit.from);
+    this.normalizing = true;
+    try {
+      editor.replaceRange(rewritten, { line: cursor.line, ch: 0 }, { line: cursor.line, ch: line.length });
+      editor.setCursor({ line: cursor.line, ch: cursor.ch + shift });
+    } finally { this.normalizing = false; }
   }
 
   private rememberFile(file: TFile): void {

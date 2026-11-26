@@ -388,7 +388,7 @@ test('save fixes uniquely referenced headings, reuses minted IDs and preserves o
   const byPath = new Map(plan.edits.map(edit => [edit.path, edit]));
   assert.equal(byPath.get(a.path).before, source);
   assert.equal(byPath.get(b.path).before, target);
-  assert.equal(byPath.get(a.path).after, '---\nforester-id: A12345\n---\n[[tArGeT#^C12345|label]] ![[tArGeT#^C12345|custom !]] [[Target|T]] [[#^D12345|Local]]\n## Local ^D12345\nBody\n');
+  assert.equal(byPath.get(a.path).after, '---\nforester-id: A12345\n---\n[[tArGeT#^C12345|label]] ![[tArGeT#^C12345|custom !]] [[Target]] [[#^D12345]]\n## Local ^D12345\nBody\n');
   assert.equal(byPath.get(b.path).after, '---\nforester-id: B12345\n---\n# T\n## Parent\nParent body\n### Child ^C12345\nChild body\n');
   assert.equal(a.source, source);
   assert.equal(b.source, target);
@@ -407,8 +407,8 @@ test('save reports ambiguous/missing heading links and leaves code, math, raw, c
   const disabled = parse('## H\n', 'plain/Ordinary.md', {excludedFolders: ['plain']});
   assert.equal(disabled.enabled, false);
   const plan = core.planHybridSave(core.indexHybrid([a, b, disabled]), a.path, () => { throw new Error('no valid heading refs'); });
-  assert.equal(plan.edits.length, 1);
-  assert.equal(plan.edits[0].after, source.replace('[[Target]]', '[[Target|T]]'));
+  // v0.6 writes no display text, and no heading link here resolves uniquely.
+  assert.equal(plan.edits.length, 0);
   assert.ok(plan.diagnostics.some(d => d.code === 'ambiguous-reference'));
   assert.ok(plan.diagnostics.some(d => d.code === 'missing-reference'));
   assert.equal(disabled.source, '## H\n');
@@ -434,7 +434,7 @@ test('save retains manual heading IDs but still mints their missing target root 
   const targetEdit = plan.edits.find(e => e.path === b.path);
   const sourceEdit = plan.edits.find(e => e.path === a.path);
   assert.equal(targetEdit.after, '---\r\nforester-id: A12345\r\n---\r\n# T\r\n## Manual ^manual-id\r\nBody\r\n## New ^B12345 ##  \r\nText\r\n');
-  assert.ok(sourceEdit.after.includes('[[Target#^manual-id|M]] [[Target#^B12345|New]]'));
+  assert.ok(sourceEdit.after.includes('[[Target#^manual-id|M]] [[Target#^B12345]]'));
   assert.equal(parse(targetEdit.after, b.path).trees[2].meta.title, 'New');
 });
 

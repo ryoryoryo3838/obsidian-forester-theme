@@ -10,7 +10,8 @@ export const saved = '# 合成draft\n\n';
 
 export async function selectionFixture({ query = '博物', mode = 'ordinary' } = {}) {
   const before = `${saved}![[${query}]]\n`;
-  const expected = `${saved}![[6B4C0F]]\n`;
+  // v0.6: the native form ([[note]] for a whole note), not the bare tree ID.
+  const expected = `${saved}![[合成本文]]\n`;
   const h = createHarness({ [sourcePath]: saved, [targetPath]: target });
   const c = new HybridController(h.plugin, h.getter);
   await c.initialize();

@@ -136,6 +136,12 @@ export function createHarness(entries = {}, options = { folders: [], publicFolde
   Object.defineProperty(workspace, 'activeEditor', { get: () => workspace.active });
   workspace.openLinkText = async (...args) => { workspace.opens.push(args); };
   const metadataCache = new Events();
+  // Obsidian's shortest link text: the bare name when it is unique in the vault, else the path.
+  metadataCache.fileToLinktext = file => {
+    const same = [...vault.files.values()].filter(other => other.basename.toLowerCase() === file.basename.toLowerCase() && other.extension === file.extension);
+    const name = file.extension === 'md' ? file.basename : file.path.split('/').pop();
+    return same.length === 1 ? name : file.extension === 'md' ? file.path.replace(/\.md$/i, '') : file.path;
+  };
   const app = { vault, workspace, metadataCache, commands: { commands: { 'editor:save-file': { callback: () => 'native-save' } } } };
   const plugin = new Plugin(app);
   const h = { plugin, app, vault, workspace, options, getter: () => h.options,

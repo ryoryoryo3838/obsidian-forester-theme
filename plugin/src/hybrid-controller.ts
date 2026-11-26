@@ -10,7 +10,6 @@ import { citationLabel, foresterTokens, planDisplay, treeOutline, type DisplaySp
 import { appendSlug, appendTaxon, renderMetadata, renderTreeHeader, type HeaderHost } from './hybrid-header';
 import { treeOccurrence, embedOccurrence, syntaxReady } from './hybrid-controller-helpers';
 import { createTreeRelations, createTreeRelationsAsync } from './hybrid-relations';
-import { encodeWikilinkLabel } from './hybrid-literal-label';
 import { registerHybridInput, type HybridInputHost } from './hybrid-input';
 import { registerHybridSidebar, type SidebarOutlineEntry } from './hybrid-sidebar';
 import type { HybridDiagnostic, HybridDocument, HybridIndex, HybridOptions, HybridTree, HybridSavePlan } from './hybrid-types';
@@ -692,8 +691,22 @@ export class HybridController {
         }
         return at + shift;
       };
-      const label = encodeWikilinkLabel(selected.meta.title.trim().replace(/[\r\n]+/g, ' '));
-      const link = embed ? `![[${selected.id}]]` : `[[${selected.id}${label ? '|' + label : ''}]]`;
+      // v0.6: the native form Obsidian resolves itself ([[file]] for a note,
+      // [[file#^id]] for a subtree), with no display text: Forester and the
+      // editor both show the target's own title. Obsidian's shortest link text
+      // can name another note or a tree ID (`index` vs CONFIG/INDEX.md), so it
+      // is used only when it resolves to this very tree; otherwise the full path.
+      const targetFile = this.plugin.app.vault.getAbstractFileByPath(selected.path);
+      const isRoot = selected === prepared.documents.get(selected.path)!.root;
+      const anchor = isRoot ? '' : `#^${selected.id}`;
+      const resolvesHere = (text: string): boolean => {
+        const found = resolveHybrid(prepared, text + anchor, path);
+        return found.status === 'resolved' && found.tree === selected;
+      };
+      const short = targetFile instanceof TFile ? this.plugin.app.metadataCache.fileToLinktext(targetFile, path) : undefined;
+      const linktext = short !== undefined && resolvesHere(short) ? short : selected.path;
+      if (!resolvesHere(linktext)) { new Notice('Hybrid: cannot write an unambiguous link to the selected tree'); return; }
+      const link = `${embed ? '!' : ''}[[${linktext}${anchor}]]`;
       const prospective = middle.slice(0, map(from, 'start')) + link + middle.slice(map(to, to === from ? 'start' : 'end'));
       const draft = this.parse(path, prospective, config);
       const documents = [...prepared.documents.values()].filter(doc => doc.path !== path).concat(draft);

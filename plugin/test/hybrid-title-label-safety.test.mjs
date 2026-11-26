@@ -37,7 +37,7 @@ test('generated unclosed-math title label survives real save/reparse without swa
   const b = target('Cost $$');
   noDiagnostics(projectPublic(indexHybrid([a, b])));
   const { saved, projection } = saveAndReparse(a, b);
-  assert.match(saved.source, /\[\[tArGeT\|[^\n]+\]\]/, 'exact target spelling must be retained');
+  assert.ok(saved.source.includes('[[tArGeT]]'), 'v0.6: the link keeps its exact spelling, with no display text');
   assert.ok(!saved.source.includes('Cost $$'), 'generated label must not activate block math');
   assert.ok(projection.trees.find(tree => tree.id === 'source-id').body.includes('target-id'));
 });
@@ -83,7 +83,7 @@ for (const title of [
     const a = source();
     const b = target(title);
     const { saved, projection } = saveAndReparse(a, b);
-    assert.match(saved.source, /\[\[tArGeT\|[^\n]+\]\]/);
+    assert.ok(saved.source.includes('[[tArGeT]]'), 'v0.6: no display text is written');
     const body = projection.trees.find(tree => tree.id === 'source-id').body;
     assert.equal(semanticLabel(body), title);
     const baseline = projectPublic(indexHybrid([a, b]));
@@ -116,12 +116,9 @@ test('save retains manual and empty aliases, embeds, and guarded source bytes', 
   const b = target('Literal label');
   const plan = planHybridSave(indexHybrid([a, b]), a.path);
   noDiagnostics(plan);
-  assert.deepEqual(plan.edits.map(edit => edit.path), [a.path]);
-  assert.equal(plan.edits[0].after, a.source.replace('[[tArGeT]]', '[[tArGeT|Literal label]]'));
-  const saved = parse(a.path, plan.edits[0].after);
-  noDiagnostics(saved);
-  assert.deepEqual(planHybridSave(indexHybrid([saved, b]), a.path).edits, []);
-  assert.deepEqual(projectPublic(indexHybrid([saved, b])).trees, [], 'unchanged active raw region must still fail closed');
+  // v0.6 writes no display text, so nothing in this source changes at all.
+  assert.deepEqual(plan.edits, []);
+  assert.deepEqual(projectPublic(indexHybrid([a, b])).trees, [], 'unchanged active raw region must still fail closed');
 });
 
 test('decoded labels stay literal when a public heading has no independent ID yet', () => {
