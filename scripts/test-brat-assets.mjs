@@ -4,12 +4,9 @@ import { access, readFile } from "node:fs/promises";
 const root = new URL("../", import.meta.url);
 const file = (name) => new URL(name, root);
 const fontNames = [
-  ["inria-sans-v14-latin_latin-ext-300.woff2", "normal", "300"],
-  ["inria-sans-v14-latin_latin-ext-300italic.woff2", "italic", "300"],
-  ["inria-sans-v14-latin_latin-ext-regular.woff2", "normal", "400"],
-  ["inria-sans-v14-latin_latin-ext-italic.woff2", "italic", "400"],
-  ["inria-sans-v14-latin_latin-ext-700.woff2", "normal", "700"],
-  ["inria-sans-v14-latin_latin-ext-700italic.woff2", "italic", "700"],
+  ["MonaspaceNeon-300.woff2", "normal", "300"],
+  ["MonaspaceNeon-400.woff2", "normal", "400"],
+  ["MonaspaceNeon-700.woff2", "normal", "700"],
 ];
 
 await access(file("manifest.json"));
@@ -19,12 +16,12 @@ assert.equal(manifest.name, "Forester");
 
 const css = await readFile(file("theme.css"), "utf8");
 const dataUrls = css.match(/url\("data:font\/woff2;base64,[A-Za-z0-9+/=]+"\)/g) ?? [];
-assert.equal(dataUrls.length, 6);
+assert.equal(dataUrls.length, fontNames.length);
 assert.doesNotMatch(css, /url\(["']?fonts\/[^"')]+/);
 const fontFaceBlocks = [...css.matchAll(/@font-face\s*\{[\s\S]*?\}/g)].map(
   ([block]) => block,
 );
-assert.equal(fontFaceBlocks.length, 6);
+assert.equal(fontFaceBlocks.length, fontNames.length);
 
 for (const [name, style, weight] of fontNames) {
   const payload = (await readFile(file(`fonts/${name}`))).toString("base64");

@@ -44,7 +44,7 @@ Community pluginsでForesterを有効化します。plugin IDは既存版と同�
 
 ### v2対応テーマ
 
-`v2`ブランチのルート `theme.css` と `manifest.json` が対応テーマです。BIZ UDMincho系の本文・既存の埋込みInria Sansを維持し、hybridのroot taxon、IDの点線リンク、著者・日付のmetadata行、13ptのsubtree見出し、枠のない組み込み表示を整えています。light/darkとtheme/pluginの両CSS読み込み順でChromium検証済みです。フォントが未インストールの場合の本文フォールバックは従来どおりです。
+`v2`ブランチのルート `theme.css` と `manifest.json` が対応テーマです。Seimiya デザインシステムに合わせ、本文も見出しも Monaspace Neon（埋め込み）＋ IBM Plex Sans JP（要インストール）の1書体で組み、hybridのroot taxon、IDの点線リンク、著者・日付のmetadata行、17pxのsubtree見出し、枠のない組み込み表示を整えています。light/darkとtheme/pluginの両CSS読み込み順でChromium検証済みです。フォントが未インストールの場合の本文フォールバックは従来どおりです。
 
 テストvaultの `.obsidian/themes/Forester/` にこの2ファイルを置き、外観設定で **Forester** を選択します。`plugin/styles.css` はプラグイン用なので、`theme.css`の代わりには使いません。対応テーマは`v2`ブランチのルート、またはReleaseの `forester-theme.zip`（テーマ用のmanifest同梱）から取得します。Release直下の `manifest.json` はプラグイン用です。
 

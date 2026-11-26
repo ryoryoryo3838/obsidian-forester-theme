@@ -4,15 +4,15 @@ export interface HeaderHost {
   open(target:string,path:string):void;
   register(cleanup:()=>void):void;
 }
-/** Native date labels, without treating note authors as citation authors. */
+/** Meta-line date labels, without treating note authors as citation authors. */
 function dateLabel(value:string):string {
   const m=/^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/.exec(value);
   if(!m)return value;
   const month=Number(m[2]),day=Number(m[3]);
   if(!m[2])return m[1];
   if(month<1||month>12||m[3]&&(day<1||day>new Date(Date.UTC(Number(m[1]),month,0)).getUTCDate()))return value;
-  const name=['January','February','March','April','May','June','July','August','September','October','November','December'][month-1];
-  return `${name}${m[3]?' '+day:''}, ${m[1]}`;
+  // The design system's date: 2026年8月2日, as on the site.
+  return `${m[1]}年${month}月${m[3]?day+'日':''}`;
 }
 function relationText(el:HTMLElement,value:string,path:string,host:HeaderHost,date=false):void {
   const pattern=/\[\[([^\]\r\n]+)\]\]/g;let from=0;

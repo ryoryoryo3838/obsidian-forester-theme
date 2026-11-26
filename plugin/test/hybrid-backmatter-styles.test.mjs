@@ -75,7 +75,7 @@ test('backmatter styles are scoped, Forester-like and theme-neutral in Reading a
               open:document.querySelector('details').open,renders:calls.renders };
           });
           assert.equal(result.headingColor, result.body, 'group headings use neutral ink, not external heading accents');
-          assert.match(result.headingFont, /^"Inria Sans"/);
+          assert.match(result.headingFont, /^"Moralerspace Neon"/);
           assert.equal(result.titleFont, result.headingFont); assert.equal(result.titleWeight, '700');
           assert.ok(Math.abs(result.headingSize / result.summarySize - 13 / 12) < .001, 'Forester group heading is 13/12 of footer text');
           assert.equal(result.taxonColor, mode === 'light' ? 'rgb(68, 68, 68)' : 'rgb(187, 187, 187)');

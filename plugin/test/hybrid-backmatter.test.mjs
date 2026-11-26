@@ -82,7 +82,7 @@ test('each result is closed, safely titled, unnumbered and exposes native metada
   assert.equal(summary.querySelector('.hybrid-taxon-number').textContent.trim(), 'Claim');
   assert.equal(summary.textContent.includes('9.7'), false, 'no document-context numbering');
   assert.equal(summary.querySelector('img'), null);
-  assert.match(details.querySelector('.hybrid-metadata').textContent, /October 4, 2026.*Alice/);
+  assert.match(details.querySelector('.hybrid-metadata').textContent, /2026年10月4日.*Alice/);
   assert.equal(summary.contains(details.querySelector('.hybrid-metadata')), true, 'metadata stays in the visible header while the body is collapsed');
   assert.deepEqual(h.calls.bodies, [], 'closed results never activate a Markdown component');
   h.cleanup();

@@ -95,8 +95,10 @@ test('hybrid taxon numbers use neutral body ink despite coloured headings and ac
                   assert.notEqual(titleColor, result.body, 'Fixture headings must remain coloured');
                   assert.notEqual(titleColor, result.accent, 'Fixture distinguishes heading colour from accent');
                 }
+                // The companion theme sets taxa in the design system's ink-taxon; the plugin alone keeps body ink.
+                const taxonInk = withCompanion ? { light: 'rgb(68, 68, 68)', dark: 'rgb(191, 195, 187)' }[mode] : result.body;
                 for (const entry of result.badges) {
-                  assert.equal(entry.color, result.body, `${entry.context} ${entry.label} must use body ink, not accent or heading colour`);
+                  assert.equal(entry.color, taxonInk, `${entry.context} ${entry.label} must use the taxon ink, not accent or heading colour`);
                 }
                 checked += result.badges.length;
                 console.log(`${name}: ${result.badges.length} neutral labels (${result.body}); accent ${result.accent}`);

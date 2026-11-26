@@ -19,7 +19,7 @@ test('Reading root taxon sits above H1, ID beside title, and metadata below; rep
  assert.equal(h1.querySelector('.hybrid-slug')?.textContent,'[main-id]');
  assert.equal(h1.nextElementSibling?.className,'hybrid-metadata');
  assert.ok(h1.nextElementSibling.textContent.includes('Alice'));
- assert.ok(h1.nextElementSibling.textContent.includes('October 4, 2026'));
+ assert.ok(h1.nextElementSibling.textContent.includes('2026年10月4日'));
  const person=h1.nextElementSibling.querySelector('a');person.dispatchEvent(new window.Event('click',{bubbles:true,cancelable:true}));
  assert.equal(h.workspace.opens.at(-1)?.[0],'Person.md');
  assert.equal(el.querySelector('h2 .hybrid-slug')?.textContent,'[ABCD01]');
@@ -70,7 +70,7 @@ test('frontmatter meta keys join the Forester meta line in metadata.xsl order; a
   for(const ds of state.facet(EditorView.decorations))if(typeof ds.between==='function')ds.between(0,state.doc.length,(_f,_t,d)=>{if(d.spec.widget)dom.append(d.spec.widget.toDOM({dispatch(){},focus(){}}));});
   return [...dom.querySelectorAll('.hybrid-metadata li')];};
  const items=meta('Me.md');
- assert.deepEqual(items.map(li=>li.textContent),['August 2, 2026','Alice','Univ','0009-0000-4771-5212','https://miya-lis.net']);
+ assert.deepEqual(items.map(li=>li.textContent),['2026年8月2日','Alice','Univ','0009-0000-4771-5212','https://miya-lis.net']);
  assert.equal(items[3].querySelector('a').href,'https://orcid.org/0009-0000-4771-5212');
  assert.deepEqual(meta('Quiet.md').map(li=>li.textContent),['Conf']);
  h.plugin.unload();

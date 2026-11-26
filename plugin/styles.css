@@ -50,7 +50,7 @@ body:not(.hybrid-show-properties) :is(.markdown-source-view:has(.cm-line.hybrid-
 .markdown-source-view.mod-cm6 .hybrid-tree-body :is(h1, h2, h3, h4, h5, h6),
 .markdown-source-view.mod-cm6 .cm-line.hybrid-tree-heading,
 .markdown-source-view.mod-cm6 .cm-line.hybrid-tree-heading .cm-header {
-	font-family: "Inria Sans", "BIZ UDGothic", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", sans-serif;
+	font-family: "Moralerspace Neon", "Monaspace Neon", "IBM Plex Sans JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", sans-serif;
 }
 .hybrid-tree-header h1, .hybrid-tree-header h2 { margin-block: .25em; }
 .hybrid-bibtex { white-space: pre-wrap; font-size: .85rem; }
@@ -73,7 +73,7 @@ body:not(.hybrid-show-properties) :is(.markdown-source-view:has(.cm-line.hybrid-
 	padding-block-start: 0;
 	border-block-start: 0;
 	color: var(--text-normal);
-	font-family: "Inria Sans", "BIZ UDGothic", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", sans-serif;
+	font-family: "Moralerspace Neon", "Monaspace Neon", "IBM Plex Sans JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", sans-serif;
 	--hybrid-backmatter-taxon: #444;
 	--hybrid-backmatter-slug: gray;
 }
