@@ -83,6 +83,7 @@ export class MockEditor {
   setSelections(s) { this.selections = structuredClone(s); }
   posToOffset(p) { return offset(this.value, p); }
   offsetToPos(at) { return position(this.value, at); }
+  replaceSelection(text) { this.replaceRange(text, this.getCursor('from'), this.getCursor('to')); const at = this.posToOffset(this.getCursor('from')) + text.length; this.setCursor(this.offsetToPos(at)); }
   replaceRange(text, from, to = from, origin) {
     const start = this.posToOffset(from), end = this.posToOffset(to);
     this.undoStack.push(this.value); this.replacements.push({ text, from, to, origin, start, end });

@@ -67,7 +67,7 @@ export default class ForesterPlugin extends Plugin {
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		this.applySettingsToDom();
-    this.hybridController = new HybridController(this, () => this.settings.hybrid, () => this.settings.treeLinkSuggest !== false);
+    this.hybridController = new HybridController(this, () => this.settings.hybrid, () => this.settings.treeLinkSuggest !== false, () => this.settings.siteUrl ?? '');
     const hybridReady = this.hybridController.initialize();
 
 		// All Markdown rendering is controller-owned; excluded paths remain native.

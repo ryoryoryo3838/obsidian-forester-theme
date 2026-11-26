@@ -8,6 +8,8 @@ export interface ForesterSettings {
   hybrid: HybridOptions;
   /** Typing `[[` in an enabled note suggests trees and inserts a tree link instead of a file link. */
   treeLinkSuggest: boolean;
+  /** The published site's address; a pasted URL under it becomes an internal tree link. Empty turns this off. */
+  siteUrl: string;
 	/** Rewrite `![[x]]` into a Forester transclusion block. */
 	transclusionHeaders: boolean;
 	/** Prefix subtree titles with `Taxon 1.2. `. */
@@ -43,6 +45,7 @@ export interface ForesterSettings {
 export const DEFAULT_SETTINGS: ForesterSettings = {
   hybrid: { ...DEFAULT_HYBRID, folders: [], excludedFolders: [], publicFolders: [], reservedIds: [] },
   treeLinkSuggest: true,
+  siteUrl: '',
 	transclusionHeaders: true,
 	numberSubtrees: true,
 	showSlugs: true,
@@ -78,6 +81,13 @@ export class ForesterSettingTab extends PluginSettingTab {
       .setDesc('In notes that use Forester trees, typing [[ (or ![[) lists trees by ID, title or file path and inserts the same link as “Insert tree link” (or “Insert tree embed”). Typing |, # or ^ returns to Obsidian’s own link suggestions. Turn off to always use Obsidian’s file suggestions.')
       .addToggle(toggle => toggle.setValue(this.plugin.settings.treeLinkSuggest).onChange(async value => {
         this.plugin.settings.treeLinkSuggest = value;
+        await this.plugin.saveSettings();
+      }));
+    new Setting(containerEl)
+      .setName('Published site URL')
+      .setDesc('Pasting a URL of a page on this site (for example https://example.net/claim-001/) inserts a link to that tree instead. Leave empty to paste URLs as they are.')
+      .addText(text => text.setPlaceholder('https://example.net/').setValue(this.plugin.settings.siteUrl ?? '').onChange(async value => {
+        this.plugin.settings.siteUrl = value.trim();
         await this.plugin.saveSettings();
       }));
     containerEl.createEl('p',{cls:'setting-item-description',text:'Use “Check hybrid trees” for local diagnostics and “Preview public projection” to validate the public subset. Raw Forester is highlighted, not executed. Citation fields: citation-authors and publication-year.'});

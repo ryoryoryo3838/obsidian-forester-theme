@@ -106,7 +106,7 @@ export class HybridController {
   private backmatterPrepareTimer?: ReturnType<typeof setTimeout>;
   private backmatterPreparing = false;
 
-  constructor(private plugin: Plugin, private options: () => HybridOptions, private linkSuggest: () => boolean = () => true) {}
+  constructor(private plugin: Plugin, private options: () => HybridOptions, private linkSuggest: () => boolean = () => true, private siteUrl: () => string = () => '') {}
 
   private configuration(): { options: HybridOptions; key: string } {
     const value = this.options();
@@ -293,7 +293,7 @@ export class HybridController {
       pre.append(code); el.append(pre);
     });
     this.markdownView();
-    const input = registerHybridInput(this.plugin, { index: () => this.currentIndex(), searchIndex: () => this.index, subscribeSearch: update => { this.searchListeners.add(update); return () => this.searchListeners.delete(update); }, resolve: (target, path, index) => resolveHybrid(index ?? this.currentIndex(), target, path), insertTarget: (editor, file, tree, embed, replacement) => this.insertTarget(editor, file, tree, embed, replacement), linkSuggest: () => this.linkSuggest() });
+    const input = registerHybridInput(this.plugin, { index: () => this.currentIndex(), searchIndex: () => this.index, subscribeSearch: update => { this.searchListeners.add(update); return () => this.searchListeners.delete(update); }, resolve: (target, path, index) => resolveHybrid(index ?? this.currentIndex(), target, path), insertTarget: (editor, file, tree, embed, replacement) => this.insertTarget(editor, file, tree, embed, replacement), linkSuggest: () => this.linkSuggest(), siteUrl: () => this.siteUrl() });
     registerHybridSidebar(this.plugin, { current: () => this.current(), outline: (document, tree) => this.outline(document, tree), relations: tree => this.relations(tree), openTree: (tree, newLeaf) => this.openTree(tree, newLeaf), focusOccurrence: entry => this.focusOccurrence(entry), subscribe: update => this.subscribe(update) });
     this.plugin.addCommand({ id: 'check-hybrid-trees', name: 'Check hybrid trees', callback: () => this.checkTrees() });
     this.plugin.addCommand({ id: 'lift-section-to-note', name: 'Return to parent: move this section into its own note',

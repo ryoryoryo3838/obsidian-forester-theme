@@ -16,6 +16,8 @@ export type HybridInputHost = {
   }): Promise<void>;
   /** Whether typing `[[` offers trees alongside native file candidates (default on). */
   linkSuggest?(): boolean;
+  /** The published site's address; a pasted URL under it becomes a tree link. */
+  siteUrl?(): string;
 };
 
 /** Search only the existing index; never read or rescan the vault on input. */
@@ -79,6 +81,7 @@ class InputSupport {
       if (info?.file && this.host.linkSuggest?.() !== false) this.normalizeIdLinks(editor, info.file);
     }));
     plugin.registerEvent(workspace.on('active-leaf-change', () => this.syncBinding()));
+    plugin.registerEvent(workspace.on('editor-paste', (event, editor, info) => { if (info?.file) this.pasteSiteUrl(event, editor, info.file); }));
     plugin.registerEvent(workspace.on('file-open', () => this.syncBinding()));
     plugin.register(() => {
       this.alive = false;
@@ -110,6 +113,43 @@ class InputSupport {
       this.searchTimer = setTimeout(() => { this.searchTimer = undefined; void this.prepareSearch(); }, 0);
     }));
     void this.prepareSearch();
+  }
+
+  /**
+   * v0.6: pasting the URL of a page on the published site (`<site>/<id>/`)
+   * inserts the native link to that tree instead, so a link copied from the
+   * browser stays a tree link. Anything else is pasted as usual, by Obsidian
+   * or another plugin; this handler claims the paste only when it inserts.
+   */
+  pasteSiteUrl(event: ClipboardEvent, editor: Editor, file: TFile): void {
+    const site = this.host.siteUrl?.().trim().replace(/\/+$/, '');
+    const text = event.clipboardData?.getData('text/plain').trim();
+    if (!site || !text || event.defaultPrevented) return;
+    const match = new RegExp(`^${site.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/^https?/, 'https?')}/([A-Za-z0-9-]+)/?(?:index\\.html)?$`, 'i').exec(text);
+    if (!match) return;
+    const index = this.host.index();
+    const trees = index.ids.get(match[1].toLowerCase()) ?? [];
+    if (trees.length !== 1 || !index.documents.get(trees[0].path)?.enabled) return;
+    const from = editor.getCursor('from');
+    if (this.protectedAt(editor, file, editor.posToOffset(from))) return;
+    const link = this.nativeLink(trees[0], index, file.path);
+    if (!link) return;
+    event.preventDefault();
+    editor.replaceSelection(`[[${link}]]`);
+  }
+
+  /** The native link text for a tree ([[note]] or [[note#^id]]) that resolves to it from `fromPath`. */
+  private nativeLink(tree: HybridTree, index: HybridIndex, fromPath: string): string | undefined {
+    const owner = index.documents.get(tree.path);
+    const target = this.plugin.app.vault.getAbstractFileByPath(tree.path);
+    if (!owner || !target || !('extension' in target)) return undefined;
+    const anchor = tree === owner.root ? '' : `#^${tree.id}`;
+    const here = (text: string): boolean => {
+      const found = this.host.resolve(text + anchor, fromPath, index);
+      return found.status === 'resolved' && found.tree === tree;
+    };
+    const short = this.plugin.app.metadataCache.fileToLinktext(target as TFile, fromPath);
+    return here(short) ? short + anchor : here(tree.path) ? tree.path + anchor : undefined;
   }
 
   /** Whether `offset` in this editor's text is code, a comment or other protected source. */
@@ -181,18 +221,9 @@ class InputSupport {
       const trees = index.ids.get(id.toLowerCase()) ?? [];
       const resolved = this.host.resolve(id, file.path, index);
       if (trees.length !== 1 || resolved.status !== 'resolved' || resolved.tree !== trees[0]) continue;
-      const tree = trees[0], owner = index.documents.get(tree.path);
-      const target = this.plugin.app.vault.getAbstractFileByPath(tree.path);
-      if (!owner || !target || !('extension' in target)) continue;
-      const anchor = tree === owner.root ? '' : `#^${tree.id}`;
-      const here = (text: string): boolean => {
-        const found = this.host.resolve(text + anchor, file.path, index);
-        return found.status === 'resolved' && found.tree === tree;
-      };
-      const short = this.plugin.app.metadataCache.fileToLinktext(target as TFile, file.path);
-      const linktext = here(short) ? short : here(tree.path) ? tree.path : undefined;
+      const linktext = this.nativeLink(trees[0], index, file.path);
       if (linktext === undefined) continue;
-      const text = `${match[1]}[[${linktext}${anchor}${match[3]}]]`;
+      const text = `${match[1]}[[${linktext}${match[3]}]]`;
       // Our own rewrite fires editor-change too; an unchanged link must not loop.
       if (text !== match[0]) edits.push({ from, to, text });
     }
