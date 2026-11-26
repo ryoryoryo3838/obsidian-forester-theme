@@ -56,7 +56,8 @@ test('transclusions use the same native header and ht hides the complete header,
  const dom=widgets[0].toDOM({dispatch(){},focus(){}});await drain();
  assert.equal(dom.querySelector('header h1 .hybrid-root-taxon')?.textContent.trim(),'Claim');
  assert.equal(dom.querySelector('header .hybrid-slug')?.textContent,'[main-id]');
- assert.ok(dom.querySelector('header .hybrid-metadata')?.textContent.includes('Alice'));
+ // v0.6: Forester hides a transclusion's metadata by default; `+m` shows it.
+ assert.equal(dom.querySelector('header .hybrid-metadata'),null);
  const hidden=widgets[1].toDOM({dispatch(){},focus(){}});await drain();assert.equal(hidden.querySelector('header'),null);
  for(const widget of widgets)widget.destroy();h.plugin.unload();
 });

@@ -44,7 +44,7 @@ test('v0.6: `.` suggests the taxa in use, most used first, and a new name', asyn
   const { h } = await start();
   const view = h.open('Page.md', '# Page\n\n## .');
   view.editor.setCursor({ line: 2, ch: 4 });
-  const suggest = h.plugin.suggesters.at(-1);
+  const suggest = h.plugin.suggesters.at(-2); // the embed-flag suggester is registered last
   const trigger = suggest.onTrigger(view.editor.getCursor(), view.editor, view.file);
   assert.ok(trigger);
   suggest.context = { ...trigger, editor: view.editor, file: view.file };

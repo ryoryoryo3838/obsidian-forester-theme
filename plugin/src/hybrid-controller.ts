@@ -1284,11 +1284,21 @@ export class HybridController {
     el.setAttribute('data-hybrid-source-path', tree.path);
     el.setAttribute('data-hybrid-from', String(tree.contentFrom)); el.setAttribute('data-hybrid-to', String(tree.to));
     const component = parent.addChild(new Component()); component.load();
+    // Forester's transclusion defaults: numbered and expanded, metadata hidden (`+m` shows it).
     if (flags.heading) {
-      const header = renderTreeHeader(el.ownerDocument, tree, [tree.meta.taxon, tree.number].filter(Boolean).join(' '), this.headerHost(component, index));
+      const label = [tree.meta.taxon, flags.numbered === false ? '' : tree.number].filter(Boolean).join(' ');
+      const header = renderTreeHeader(el.ownerDocument, tree, label, this.headerHost(component, index), flags.metadata === true);
       this.bindTreeRoute(header, tree, component); el.append(header);
     }
     const body = el.ownerDocument.createElement('div'); body.className = 'hybrid-tree-body'; el.append(body);
+    if (flags.expanded === false) {
+      // `-e`: collapsed like Forester's `mainmatter collapsed`; the toggle opens it in place.
+      el.classList.add('hybrid-embed-collapsed'); body.hidden = true;
+      const toggle = el.ownerDocument.createElement('button'); toggle.type = 'button'; toggle.className = 'hybrid-embed-toggle';
+      const sync = () => { toggle.textContent = body.hidden ? '▸' : '▾'; toggle.setAttribute('aria-expanded', String(!body.hidden)); };
+      sync(); el.insertBefore(toggle, body);
+      component.registerDomEvent(toggle, 'click', event => { event.preventDefault(); body.hidden = !body.hidden; sync(); });
+    }
     let cancelled = false; component.register(() => { cancelled = true; this.renderedTrees.delete(el); });
     const section = this.sectionSource(doc, tree, index);
     void MarkdownRenderer.render(this.plugin.app, section.source, body, tree.path, component).then(() => {

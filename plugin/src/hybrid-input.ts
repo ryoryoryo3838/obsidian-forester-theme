@@ -543,6 +543,46 @@ class HybridWikilinkSuggest extends EditorSuggest<LinkChoice> {
   }
 }
 
+interface FlagChoice { token: string; name: string; note: string; }
+// Forester's transclusion flags, short form; only departures from its defaults are offered.
+const flagChoices: FlagChoice[] = [
+  { token: '-h', name: 'heading', note: 'hide the heading' },
+  { token: '-t', name: 'toc', note: 'leave out of the table of contents' },
+  { token: '-n', name: 'numbered', note: 'no section number' },
+  { token: '-e', name: 'expanded', note: 'collapsed' },
+  { token: '+m', name: 'metadata', note: 'show date and authors' },
+];
+const flagLetters: Record<string, string> = { h: 'heading', t: 'toc', n: 'numbered', e: 'expanded', m: 'metadata' };
+// `![[target|-h -e` up to the caret: the flags already written, then the word being typed.
+const flagQuery = /!\[\[([^[\]|\r\n]+)\|((?:[+-][a-z]+[ \t]+)*)([+-]?[a-z]*)$/;
+
+/** v0.6: after | in a note embed, suggest the transclusion flags not yet written. */
+class HybridEmbedFlagSuggest extends EditorSuggest<FlagChoice> {
+  constructor(private support: InputSupport) { super(support.plugin.app); }
+  onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
+    if (!file || !samePosition(editor.getCursor('from'), cursor) || !samePosition(editor.getCursor('to'), cursor)) return null;
+    const match = flagQuery.exec(editor.getLine(cursor.line).slice(0, cursor.ch));
+    // After | an image embed takes a size, not flags.
+    if (!match || (/\.[A-Za-z0-9]+$/.test(match[1]) && !/\.md$/i.test(match[1]))) return null;
+    const start = { line: cursor.line, ch: cursor.ch - match[3].length };
+    if (!this.support.capture(editor, file, start, cursor)) return null;
+    return { start, end: { ...cursor }, query: match[2] + '\u0000' + match[3] };
+  }
+  getSuggestions(context: EditorSuggestContext): FlagChoice[] {
+    const [written, typing] = context.query.split('\u0000');
+    const used = new Set(written.trim().split(/[ \t]+/).filter(Boolean).map(word => flagLetters[word.slice(1)] ?? word.slice(1)));
+    return flagChoices.filter(choice => !used.has(choice.name) && (choice.token.startsWith(typing) || `${choice.token[0]}${choice.name}`.startsWith(typing)));
+  }
+  renderSuggestion(choice: FlagChoice, el: HTMLElement): void { el.textContent = `${choice.token}  ${choice.note}`; }
+  selectSuggestion(choice: FlagChoice): void {
+    if (!this.context) return;
+    const { editor, start, end } = this.context;
+    this.close();
+    editor.replaceRange(`${choice.token} `, start, end);
+    editor.setCursor({ line: start.line, ch: start.ch + choice.token.length + 1 });
+  }
+}
+
 interface TaxonChoice { taxon: string; count: number; fresh: boolean; }
 
 /** v0.6: `.` at the start of a heading suggests the taxa in use; choosing one writes `*Taxon.* `. */
@@ -601,6 +641,9 @@ export function registerHybridInput(plugin: Plugin, host: HybridInputHost): { pr
   const taxa = new HybridTaxonSuggest(support);
   plugin.registerEditorSuggest(taxa);
   plugin.register(() => taxa.close());
+  const flags = new HybridEmbedFlagSuggest(support);
+  plugin.registerEditorSuggest(flags);
+  plugin.register(() => flags.close());
   for (const [command, id, name] of [
     ['subtree', 'insert-subtree', 'Insert subtree'],
     ['transclude', 'insert-tree-embed', 'Insert tree embed'],

@@ -45,8 +45,8 @@ export function renderMetadata(dom:Document,tree:HybridTree,host:HeaderHost):HTM
     tree.meta.authors.forEach((value,i)=>{if(i)address.append(dom.createTextNode(', '));relationText(address,value,tree.path,host);});li.append(address);list.append(li);}
   return list.childElementCount?el:null;
 }
-export function renderTreeHeader(dom:Document,tree:HybridTree,label:string,host:HeaderHost):HTMLElement {
+export function renderTreeHeader(dom:Document,tree:HybridTree,label:string,host:HeaderHost,showMetadata=true):HTMLElement {
   const header=dom.createElement('header');header.className='hybrid-tree-header';
   const heading=dom.createElement(tree.level===1?'h1':'h2');heading.textContent=tree.meta.title;appendTaxon(heading,tree,label);appendSlug(heading,tree,host);header.append(heading);
-  const metadata=renderMetadata(dom,tree,host);if(metadata)header.append(metadata);return header;
+  const metadata=showMetadata?renderMetadata(dom,tree,host):null;if(metadata)header.append(metadata);return header;
 }

@@ -1,13 +1,22 @@
 import { treeOccurrence, embedOccurrence, syntaxReady } from './hybrid-controller-helpers';
 import type { HybridDocument, HybridMeta, HybridResolution, HybridTree, SourceRange } from './hybrid-types';
-export interface EmbedFlags { target: string; heading: boolean; toc: boolean; error?: string; }
+import { parseEmbedFlags } from './hybrid-core';
+/** Forester's transclusion flags for one embed line; the v0.6 ones default to Forester's own. */
+export interface EmbedFlags { target: string; heading: boolean; toc: boolean; numbered?: boolean; expanded?: boolean; metadata?: boolean; error?: string; }
 export function parseEmbedLine(line: string): EmbedFlags | null {
   const m = /^\s*!\[\[([^\]\n]+)\]\]\s*(?:%%([a-z]+)%%)?\s*$/.exec(line);
   if (!m) return null;
   const letters = m[2] ?? '';
   const unknown = [...letters].find(c => c !== 'h' && c !== 't');
-  const result: EmbedFlags = { target:m[1].split('|')[0], heading:!letters.includes('h'), toc:!letters.includes('t') };
+  const bar = m[1].indexOf('|');
+  // v0.6 flags after | (`![[x|-h -e +m]]`); text that is not all flags is an alias.
+  const parsed = bar < 0 ? undefined : parseEmbedFlags(m[1].slice(bar + 1));
+  const result: EmbedFlags = parsed
+    ? { target: m[1].slice(0, bar), heading: parsed.flags.heading, toc: parsed.flags.toc, numbered: parsed.flags.numbered, expanded: parsed.flags.expanded, metadata: parsed.flags.metadata }
+    : { target: m[1].split('|')[0], heading: !letters.includes('h'), toc: !letters.includes('t') };
   if (unknown) result.error = `Unknown embed flag: ${unknown}`;
+  else if (parsed?.error) result.error = parsed.error;
+  else if (parsed && letters) result.error = 'Write embed flags after | or in %%, not both';
   return result;
 }
 /** A deliberately small author-year label, not a claim of complete APA/CSL compliance. */
