@@ -409,3 +409,19 @@ body.forester-hide-slugs a.slug {
 .hybrid-sidebar :is(.hybrid-sidebar-metadata, .hybrid-sidebar-bibliography, .hybrid-sidebar-unavailable) { display: block; color: var(--text-muted); font-size: .9em; overflow-wrap: anywhere; }
 .hybrid-sidebar .hybrid-sidebar-empty { color: var(--text-muted); }
 .hybrid-sidebar .hybrid-sidebar-error { color: var(--text-error); overflow-wrap: anywhere; }
+
+/* v0.6 `-e` embeds: collapsed like Forester's `mainmatter collapsed`, opened in place. */
+.hybrid-embed-toggle {
+  appearance: none;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  padding: 0 0.3em;
+  font: inherit;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.hybrid-embed-toggle:hover,
+.hybrid-embed-toggle:focus-visible {
+  color: var(--text-normal);
+}
