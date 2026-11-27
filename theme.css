@@ -449,3 +449,13 @@
 	font-family: var(--font-monospace-theme);
 	background-color: var(--code-background);
 }
+
+/* ── Phones ───────────────────────────────────────────────────────────────── */
+/* A phone's column cannot spare Obsidian's full list indent per level. */
+.is-mobile .markdown-rendered :is(ul, ol),
+.is-mobile .markdown-source-view.mod-cm6 .cm-content :is(ul, ol) {
+	padding-inline-start: 1.3em;
+}
+.is-mobile .markdown-rendered :is(ul, ol) :is(ul, ol) {
+	padding-inline-start: 1.1em;
+}

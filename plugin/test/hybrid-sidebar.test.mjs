@@ -687,7 +687,7 @@ test('one Forester view holds contents, context, references, backlinks and relat
   h.host.groups = { context: [tree('parent', 'Parent')], backlinks: [tree('back', 'Back')], related: [], references: [] };
   const view = await open(h, 'forester-tree');
   await settle();
-  assert.deepEqual([...view.contentEl.querySelectorAll('h3')].map(h3 => h3.textContent), ['Contents', 'Context', 'Backlinks']);
+  assert.deepEqual([...view.contentEl.querySelectorAll('h3')].map(h3 => h3.textContent), ['Table of Contents', 'Context', 'Backlinks']);
   assert.deepEqual([...view.contentEl.querySelectorAll('.hybrid-sidebar-relations .hybrid-sidebar-heading')].map(b => b.textContent), ['Parent', 'Back']);
   h.host.entries = []; h.host.groups = { context: [], backlinks: [], related: [], references: [] }; h.host.emit();
   await settle();

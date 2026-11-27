@@ -175,7 +175,7 @@ class HybridSidebarView extends ItemView {
   private renderAll(snapshot: SidebarSnapshot): void {
     const before = this.contentEl.childElementCount;
     const section = (title: string, kind: string): void => { this.contentEl.createEl('h3', { cls: 'hybrid-sidebar-section', text: title, attr: { 'data-section': kind } }); };
-    if (snapshot.outline.length) { section('Contents', 'contents'); this.renderOutline(snapshot.outline); }
+    if (snapshot.outline.length) { section('Table of Contents', 'contents'); this.renderOutline(snapshot.outline); }
     for (const [kind, title] of [['context', 'Context'], ['references', 'References'], ['backlinks', 'Backlinks'], ['related', 'Related']] as const) {
       if (!snapshot.relations[kind].length) continue;
       section(title, kind); this.renderRelations(kind, snapshot.relations[kind]);
