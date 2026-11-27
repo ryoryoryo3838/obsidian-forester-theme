@@ -459,3 +459,11 @@
 .is-mobile .markdown-rendered :is(ul, ol) :is(ul, ol) {
 	padding-inline-start: 1.1em;
 }
+
+/* ── Column ───────────────────────────────────────────────────────────────── */
+/* Forester sets the text left, not centred: Obsidian's readable line width
+   keeps its measure but starts at the left edge. */
+.markdown-preview-view.is-readable-line-width .markdown-preview-sizer,
+.markdown-source-view.mod-cm6.is-readable-line-width .cm-sizer {
+	margin-inline: 0 auto;
+}
